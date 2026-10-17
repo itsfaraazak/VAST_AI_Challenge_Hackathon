@@ -31,6 +31,13 @@ class Settings:
         self.wandb_team = _opt("WANDB_TEAM")
         self.wandb_project = _opt("WANDB_PROJECT")
         self.wandb_base = _opt("WANDB_INFERENCE_URL", "https://api.inference.wandb.ai/v1").rstrip("/")
+        self.s3_endpoint = _opt("S3_ENDPOINT").rstrip("/")
+        self.s3_access_key = _opt("ACCESS_KEY")
+        self.s3_secret_key = _opt("SECRET_KEY")
+        self.s3_bucket = _opt("S3_CHUNKS_BUCKET")
+        self.vdb_endpoint = _opt("VDB_ENDPOINT") or self.s3_endpoint
+        self.vdb_schema = _opt("VDB_SCHEMA")
+        self.embed_model = _opt("COSMOS_EMBED1_MODEL")
         self.supply_voltage = float(_opt("SUPPLY_VOLTAGE", "5.0"))
         self.cosmos_p95_degraded_s = float(_opt("COSMOS_P95_DEGRADED_S", "8.0"))
         self.heartbeat_s = float(_opt("HEARTBEAT_S", "5.0"))
@@ -39,6 +46,10 @@ class Settings:
     @property
     def gpu_ready(self) -> bool:
         return bool(self.gpu_token and self.cosmos_url)
+
+    @property
+    def s3_ready(self) -> bool:
+        return bool(self.s3_endpoint and self.s3_access_key and self.s3_secret_key and self.s3_bucket)
 
     @property
     def vss_ready(self) -> bool:
