@@ -12,6 +12,7 @@ import urllib.request
 
 import cosmos
 import rules
+import simulator
 import vss
 
 WAND_BASE = "https://api.inference.wandb.ai/v1"
@@ -19,6 +20,11 @@ WAND_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
 STREAK_NEEDED = 2
 # If the board is already partly built, catch up in one confident look.
 CATCHUP_CONFIDENCE = 0.55
+
+_SIM_ASK = re.compile(
+    r"what should i (wire|do|build)|next (step|wire)|will it work|simulate|wokwi|sim\b|what to wire",
+    re.I,
+)
 
 # Structured evidence required before a step can complete.
 STEP_EVIDENCE = {
@@ -90,6 +96,10 @@ class LiveSession:
             return {"components": [], "connections": []}
         note = self.notes[-1]
         return {"components": note.get("components") or [], "connections": note.get("connections") or []}
+
+    def circuit_snapshot(self) -> dict:
+        with self._lock:
+            return self._circuit()
 
     def _ensure_examples(self) -> None:
         """VAST examples are for chat only — never for vision."""
@@ -340,7 +350,7 @@ class LiveSession:
                 },
             }
 
-    def chat(self, message: str) -> dict:
+    def chat(self, message: str, sim_state=None) -> dict:
         self._ensure_examples()
         with self._lock:
             caption = self.last_caption
@@ -350,7 +360,15 @@ class LiveSession:
             raw = dict(self.last_raw)
             reliable = self._frame_is_reliable(raw) if raw else False
 
-        if not reliable and not caption:
+        sim_payload = None
+        if _SIM_ASK.search(message):
+            if sim_state is not None:
+                sim_state.sync(circuit)
+                sim_payload = sim_state.advise(question=message)
+            else:
+                sim_payload = simulator.advise(circuit, question=message)
+
+        if not reliable and not caption and not sim_payload:
             return {
                 "answer": "I have not seen a clear Arduino bench yet. Point Desk View at the breadboard and wait for a verified look.",
                 "seek_sec": None,
@@ -372,18 +390,24 @@ class LiveSession:
             deduped.append(text)
         examples = deduped[:8]
 
-        phrased = _phrase(message, caption, advice, circuit, examples, raw, reliable)
+        phrased = _phrase(message, caption, advice, circuit, examples, raw, reliable, sim_payload)
         if not phrased:
-            if advice and reliable:
+            if sim_payload and sim_payload.get("advice"):
+                phrased = sim_payload["advice"]
+            elif advice and reliable:
                 phrased = advice
             elif caption:
                 phrased = f"From the last verified look: {caption}"
             else:
                 phrased = "Show the board clearly and ask again."
+        evidence = f"reliable={reliable} examples={len(examples)}"
+        if sim_payload:
+            evidence = f"{evidence} Sim: {sim_payload.get('advice', '')}"
         return {
             "answer": phrased,
             "seek_sec": None,
-            "evidence_summary": f"reliable={reliable} examples={len(examples)}",
+            "evidence_summary": evidence.strip(),
+            "sim": sim_payload,
         }
 
 
@@ -395,6 +419,7 @@ def _phrase(
     examples: list[str],
     raw: dict,
     reliable: bool,
+    sim_payload: dict | None = None,
 ) -> str | None:
     key = os.environ.get("WANDB_API_KEY", "").strip()
     if not key:
@@ -407,6 +432,11 @@ def _phrase(
         "Components: " + (", ".join(circuit.get("components") or []) or "none"),
         "Connections: " + ("; ".join((circuit.get("connections") or [])[:4]) or "none"),
     ]
+    if sim_payload:
+        lines.append("Electrical sim advice (lead with this for wiring / will-it-work):")
+        lines.append(sim_payload.get("advice") or "")
+        for action in (sim_payload.get("next_actions") or [])[:2]:
+            lines.append(f"- next: {action.get('label')}")
     if examples:
         lines.append("Indexed Arduino examples from VAST (prior demos only, not this camera):")
         for ex in examples[:5]:
@@ -421,6 +451,7 @@ def _phrase(
                 "content": (
                     "You are CURRENT, an Arduino bench partner. "
                     "Trust the live vision fields first. If reliable is false, say you cannot see the board yet. "
+                    "If sim advice is present for wiring or will-it-work, lead with it. "
                     "VAST examples are style only. One or two short sentences. No markdown."
                 ),
             },

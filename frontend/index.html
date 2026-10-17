@@ -76,6 +76,33 @@
         </aside>
       </main>
 
+      <section class="sim" aria-label="Wokwi simulator">
+        <header class="sim__head">
+          <div>
+            <h2 class="sim__title">Simulator</h2>
+            <p class="sim__status" id="simStatus">Idle</p>
+          </div>
+          <div class="sim__actions">
+            <button type="button" class="sim__btn" id="simSync">Sync from bench</button>
+            <button type="button" class="sim__btn sim__btn--run" id="simRun">Run</button>
+            <button type="button" class="sim__btn" id="simApply">Apply next fix</button>
+          </div>
+        </header>
+        <p class="sim__advice" id="simAdvice">
+          Sync from the live circuit, then Run to open Blink in Wokwi.
+        </p>
+        <div class="sim__stage">
+          <iframe
+            id="wokwiFrame"
+            class="sim__frame"
+            title="Wokwi Blink simulator"
+            src="https://wokwi.com/experimental/embed"
+            allow="fullscreen"
+          ></iframe>
+          <pre class="sim__serial" id="simSerial" aria-label="Serial output"></pre>
+        </div>
+      </section>
+
       <section class="dock" aria-label="Assistant">
         <div class="dock__thread" id="chatThread" aria-live="polite"></div>
         <form class="dock__compose" id="chatForm">

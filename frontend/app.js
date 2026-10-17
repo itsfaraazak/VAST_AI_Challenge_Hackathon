@@ -1,3 +1,5 @@
+import { mountSimPanel } from "./sim-panel.js";
+
 const STEPS = [
   {
     id: "led",
@@ -462,6 +464,12 @@ fetch("api/session")
     if (data?.steps) renderSteps(data.steps);
   })
   .catch(() => {});
+
+mountSimPanel({
+  onAdvice(text) {
+    /* advice also shown in the sim strip */
+  },
+});
 
 addMessage(
   "agent",

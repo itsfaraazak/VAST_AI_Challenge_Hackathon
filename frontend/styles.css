@@ -56,7 +56,7 @@ body {
 .app {
   min-height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   max-width: 1440px;
   margin: 0 auto;
   padding: 1rem 1.25rem 1.1rem;
@@ -558,6 +558,121 @@ body {
 
 .dock__send:hover {
   background: #db8a4f;
+}
+
+
+/* ——— Simulator strip ——— */
+
+.sim {
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.9rem 0.9rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.sim__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.sim__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sim__status {
+  margin: 0.15rem 0 0;
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.sim__actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.sim__btn {
+  appearance: none;
+  border: 1px solid var(--rule);
+  background: var(--panel-2);
+  color: var(--paper);
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.75rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.sim__btn:hover {
+  border-color: var(--mute);
+}
+
+.sim__btn--run {
+  background: var(--signal);
+  color: #12150a;
+  border-color: var(--signal);
+}
+
+.sim__advice {
+  margin: 0;
+  color: var(--paper);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.sim__stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  gap: 0.55rem;
+  min-height: 220px;
+}
+
+.sim__frame {
+  width: 100%;
+  min-height: 240px;
+  height: 280px;
+  border: 1px solid var(--rule);
+  background: #050607;
+  border-radius: var(--radius);
+}
+
+.sim__serial {
+  margin: 0;
+  padding: 0.5rem;
+  overflow: auto;
+  background: #050607;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  color: var(--ok);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 900px) {
+  .sim__stage {
+    grid-template-columns: 1fr;
+  }
+
+  .sim__serial {
+    max-height: 100px;
+  }
 }
 
 /* ——— Responsive ——— */
