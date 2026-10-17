@@ -45,12 +45,12 @@ const WIRE_COL = { red: 0xff3b3b, black: 0x4a5a6c, blue: 0x2f7bff, green: 0x31d4
 const ROWS = "ABCDEFGHIJ";
 const BOARDS = {
   nano: {
-    label: "ARDUINO NANO", cz: 14, half: 3, sig: "D13", gnd: "GND_R",
+    label: "ARDUINO NANO", cz: 0, half: 1.5, sig: "D13", gnd: "GND_R",
     right: ["VIN", "GND_R", "RST_R", "5V", "A7", "A6", "A5", "A4", "A3", "A2", "A1", "A0", "AREF", "3V3", "D13"],
     left: ["D1", "D0", "RST_L", "GND_L", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10", "D11", "D12"],
   },
   esp32: {
-    label: "ESP32 DEVKIT", cz: 16, half: 5, sig: "D2", gnd: "GND_R",
+    label: "ESP32 DEVKIT", cz: 0, half: 5.5, sig: "D2", gnd: "GND_R",
     right: ["D23", "D22", "TX0", "RX0", "D21", "D19", "D18", "D5", "TX2", "RX2", "D4", "D2", "D15", "GND_R", "3V3"],
     left: ["EN", "VP", "VN", "D34", "D35", "D32", "D33", "D25", "D26", "D27", "D14", "D12", "D13", "GND_L", "VIN"],
   },
@@ -65,7 +65,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 function pinTable(key) {
   const B = BOARDS[key], m = new Map();
   [["right", -1], ["left", 1]].forEach(([side, sgn]) => {
-    B[side].forEach((n, i) => m.set(n, new V3(i - 7, 1.0, B.cz + sgn * B.half)));
+    B[side].forEach((n, i) => m.set(n, new V3(i - 6.5, 1.0, B.cz + sgn * B.half)));
   });
   return m;
 }
@@ -94,10 +94,11 @@ function defaultLayout(board) {
   const c0 = clamp(Math.round(sig.x + 15.5), 3, 24);
   return {
     c0, sig, gnd,
-    sigHole: holePos(c0, "J"),
-    r: { a: holePos(c0, "I"), b: holePos(c0 + 4, "I") },
-    led: { a: holePos(c0 + 4, "G"), k: holePos(c0 + 5, "G") },
-    gndHole: holePos(c0 + 5, "J"),
+    // board straddles the centre channel, so its pins sit in holes E/F (or A/J): parts share the pin's strip
+    sigHole: holePos(c0, "D"),
+    r: { a: holePos(c0, "C"), b: holePos(c0 + 4, "C") },
+    led: { a: holePos(c0 + 4, "B"), k: holePos(c0 + 5, "B") },
+    gndHole: holePos(c0 + 5, "D"),
     rail: new V3(c0 + 5 - 15.5, 0, 7.3),
     railPin: new V3(gnd.x, 0, 7.3),
   };
@@ -309,6 +310,7 @@ function buildBoard(key) {
     });
   });
   const tag = flatLabel(B.label, 5, 0.7, { color: "#3a8fa6" }); tag.position.set(nano ? 4 : 0, 0.57, B.cz + (nano ? 1.6 : 2.5)); g.add(tag);
+  g.position.x = 0.5; // pin pitch lines up with breadboard columns
   g.userData.pinMeshes = pinMeshes;
   return g;
 }
