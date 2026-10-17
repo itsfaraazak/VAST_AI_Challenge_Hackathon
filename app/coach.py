@@ -246,16 +246,19 @@ def _persist(sess) -> None:
 
 
 GEN_SYSTEM = (
-    "You design beginner breadboard electronics projects. Reply with ONE strict JSON object and nothing else. "
-    "Schema: {\"id\":slug,\"title\":str,\"pitch\":str,\"mcu\":str,\"sketch\":\"Arduino sketch, max 25 lines\","
-    "\"parts_list\":[{\"type\":\"led\",\"value\":\"red\",\"qty\":1}],"
-    "\"steps\":[{\"id\":slug,\"title\":str,\"concept\":str,\"action\":str,\"teach\":str,\"why\":str,\"check\":str,"
-    "\"hole_hint\":str,\"expect\":{\"types\":[\"led\"]},\"pins\":[\"D5\",\"GND\"],"
-    "\"wires\":[{\"from\":\"D5\",\"to\":\"R1.a\",\"color\":\"#c87941\"}],\"parts\":[\"led\"]}]}. "
-    "Rules: 4 to 6 steps, last step expect {\"complete\":true} and uploads the sketch. Wires are cumulative per step (each step lists all wires so far). "
+    "You design beginner breadboard electronics projects. Reply with ONE strict JSON object and nothing else "
+    "(double quotes, no comments, no placeholders). Example shape (values are examples):\n"
+    '{"id":"button-led","title":"Button controls LED","pitch":"Press a button to light an LED.","mcu":"Arduino Nano",'
+    '"sketch":"void setup(){pinMode(5,OUTPUT);}\\nvoid loop(){}",'
+    '"parts_list":[{"type":"led","value":"red","qty":1},{"type":"resistor","value":"220","qty":1}],'
+    '"steps":[{"id":"led","title":"Add the LED","concept":"LEDs conduct one way.","action":"Place the LED across two rows.",'
+    '"teach":"Long leg is the anode.","why":"Reverse polarity blocks current.","check":"Which leg is the anode?",'
+    '"hole_hint":"Different rows for each leg.","expect":{"types":["led"]},"pins":["D5","GND"],'
+    '"wires":[{"from":"D5","to":"R1.a","color":"#c87941"},{"from":"R1.b","to":"LED1.a","color":"#d6ff4b"}],"parts":["led"]}]}\n'
+    "Rules: 4 to 6 steps, last step expect {\"complete\":true} and uploads the sketch. Wires are cumulative (each step lists all wires so far). "
     "Wire endpoints are only board pins or part terminals like R1.a, R1.b, LED1.a (anode), LED1.k (cathode), BTN1.a, BTN1.b. "
-    "EVERY LED needs a series resistor (220 ohm) between the pin and the LED anode; LED cathode goes to GND. "
-    "Never wire a pin directly to GND, 5V or 3V3. Short sentences, one concrete action per step."
+    "EVERY LED needs a series 220 ohm resistor between the pin and the LED anode; LED cathode goes to GND. "
+    "Never wire a pin directly to GND, 5V or 3V3. Short sentences, one concrete action per step. Sketch max 25 lines."
 )
 
 
@@ -277,6 +280,7 @@ async def generate_project(sess, http, prompt: str, board: str | None) -> tuple[
             return proj, "generated"
         except Exception as e:  # noqa: BLE001
             last = f"{type(e).__name__}: {e}"[:160]
+            log.warning("raw llm head: %r", text[:160])
             log.warning("project generation invalid: %s", last)
     return None, last
 
