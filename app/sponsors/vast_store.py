@@ -99,3 +99,57 @@ async def check_s3() -> tuple[bool, str]:
         return True, "bucket reachable"
     except Exception as e:  # noqa: BLE001
         return False, type(e).__name__
+
+
+# ---- generic JSON helpers (digital-twin project memory) ----
+def _put_json_sync(key: str, obj) -> None:
+    _put(key, json.dumps(obj, default=str).encode(), "application/json")
+
+
+def _get_json_sync(key: str):
+    r = _get_client().get_object(Bucket=settings.s3_bucket, Key=key)
+    return json.loads(r["Body"].read())
+
+
+def _list_sync(prefix: str) -> list[dict]:
+    out, token = [], None
+    while True:
+        kw = {"Bucket": settings.s3_bucket, "Prefix": prefix, "MaxKeys": 200}
+        if token:
+            kw["ContinuationToken"] = token
+        r = _get_client().list_objects_v2(**kw)
+        for o in r.get("Contents", []):
+            out.append({"key": o["Key"], "size": o.get("Size"), "modified": str(o.get("LastModified"))})
+        token = r.get("NextContinuationToken")
+        if not token or len(out) >= 400:
+            return out
+
+
+async def _vast_call(sess, label: str, fn, *args):
+    """Run a blocking S3 op in a thread with a trace span; returns (ok, result_or_error)."""
+    if not settings.s3_ready:
+        return False, "no S3 creds"
+    loop = asyncio.get_running_loop()
+    try:
+        async with span(sess, "vast", label=label, model="VAST S3", sponsor="vast") as s:
+            res = await loop.run_in_executor(None, fn, *args)
+            s["detail"] = label
+        return True, res
+    except Exception as e:  # noqa: BLE001
+        log.warning("vast %s failed: %s", label, type(e).__name__)
+        return False, type(e).__name__
+
+
+async def put_json(sess, key: str, obj) -> dict:
+    ok, r = await _vast_call(sess, f"S3 put {key}", _put_json_sync, key, obj)
+    return {"ok": ok, "key": key} if ok else {"ok": False, "reason": r}
+
+
+async def get_json(sess, key: str):
+    ok, r = await _vast_call(sess, f"S3 get {key}", _get_json_sync, key)
+    return r if ok else None
+
+
+async def list_prefix(sess, prefix: str) -> list[dict] | None:
+    ok, r = await _vast_call(sess, f"S3 list {prefix}", _list_sync, prefix)
+    return r if ok else None

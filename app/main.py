@@ -17,9 +17,12 @@ from coach import (
     ensure_session_coach,
     public_coach_state,
     set_step,
+    resume_project,
+    start_generated,
     start_project,
     teach_current_step,
 )
+import projects_store
 from config import settings
 from history import cross_corpus_demo
 from sponsors import vast_store, vss_upload
@@ -172,13 +175,21 @@ async def _handle_msg(sess, role: str, data: dict, http: aiohttp.ClientSession) 
                 "coach": public_coach_state(sess),
             })
     elif typ == "coach_start":
-        st = start_project(sess, data.get("project_id") or "blink", board=data.get("board"))
+        prompt = (data.get("prompt") or "").strip()
+        pid = (data.get("project_id") or "").strip().lower()
+        note = ""
+        if prompt and pid in ("", "blink") and not prompt.lower().strip(" .!").startswith("blink"):
+            await sess.broadcast({"type": "guidance", "text": "Designing your circuit...", "finding_ids": ["generating"],
+                                  "source": "wandb", "coach": public_coach_state(sess)})
+            st, note, ok = await start_generated(sess, http, prompt, data.get("board"))
+        else:
+            st = start_project(sess, pid or "blink", board=data.get("board"))
         tip = await teach_current_step(sess, http, force=True)
-        pin = "GPIO2" if st.get("board") == "esp32" else "D13"
-        text = (
-            f"Blink it is. {pin} → 220Ω → LED anode; cathode → GND. "
-            + ((tip or {}).get("text") or "")
-        )
+        if note:
+            text = note + " " + ((tip or {}).get("text") or "")
+        else:
+            pin = "GPIO2" if st.get("board") == "esp32" else "D13"
+            text = f"Blink it is. {pin} → 220Ω → LED anode; cathode → GND. " + ((tip or {}).get("text") or "")
         await sess.broadcast({"type": "coach", **st})
         await _broadcast_guidance(sess, {
             "type": "guidance",
@@ -188,6 +199,19 @@ async def _handle_msg(sess, role: str, data: dict, http: aiohttp.ClientSession) 
             "ms": (tip or {}).get("ms"),
             "coach": st,
         })
+    elif typ == "projects_list":
+        items = await projects_store.list_projects(sess)
+        await sess.broadcast({"type": "projects", "items": items or []})
+    elif typ == "resume_project":
+        rec = await projects_store.load(sess, str(data.get("key") or ""))
+        if not rec:
+            await _broadcast_guidance(sess, {"type": "guidance", "text": "I couldn't find that saved project.",
+                                             "finding_ids": ["resume"], "source": "vast", "coach": public_coach_state(sess)})
+            return
+        st = resume_project(sess, rec)
+        await sess.broadcast({"type": "coach", **st})
+        await _broadcast_guidance(sess, {"type": "guidance", "text": projects_store.resume_text(rec),
+                                         "finding_ids": ["resume"], "source": "vast", "coach": st})
     elif typ == "coach_step":
         idx = data.get("index")
         if idx is None:
@@ -327,6 +351,11 @@ async def api_upload_limits(request: web.Request) -> web.Response:
     return web.json_response({"max_mb": await vss_upload.max_upload_mb(request.app["http"]) if settings.vss_ready else 0})
 
 
+async def api_projects(request: web.Request) -> web.Response:
+    items = await projects_store.list_projects()
+    return web.json_response(items or [])
+
+
 async def index(_: web.Request) -> web.Response:
     return web.FileResponse(UI_ROOT / "index.html")
 
@@ -337,6 +366,15 @@ async def on_start(app: web.Application) -> None:
         "listening port=%s gpu=%s vss=%s wandb=%s ui=%s",
         settings.port, settings.gpu_ready, settings.vss_ready, settings.wandb_ready, UI_ROOT,
     )
+    if settings.s3_ready:
+        app["seed_task"] = asyncio.create_task(_seed(app))
+
+
+async def _seed(app: web.Application) -> None:
+    try:
+        log.info("project seed: %s", await projects_store.seed_demo(app["http"]))
+    except Exception as e:  # noqa: BLE001
+        log.warning("project seed failed: %s", type(e).__name__)
 
 
 async def on_stop(app: web.Application) -> None:
@@ -355,6 +393,7 @@ def create_app() -> web.Application:
     app.router.add_get("/api/sponsors", api_sponsors)
     app.router.add_post("/api/session/{code}/upload", api_upload)
     app.router.add_get("/api/vss-limits", api_upload_limits)
+    app.router.add_get("/api/projects", api_projects)
     app.router.add_get("/", index)
     # CURRENT frontend assets at /app.js /styles.css (relative to index)
     if UI_ROOT.exists():

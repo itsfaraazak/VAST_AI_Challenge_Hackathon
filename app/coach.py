@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from config import settings
+import curriculum
 from curriculum import get_project, infer_step_from_twin, list_projects, normalize_board, step_at
 from mistakes import diagnose, public as public_mistakes
 from trace import span
@@ -22,7 +23,8 @@ except ImportError:  # pragma: no cover
     aiohttp = None  # type: ignore
 
 
-async def _wandb_chat(http: aiohttp.ClientSession, system: str, user: str) -> tuple[str, dict]:
+async def _wandb_chat(http: aiohttp.ClientSession, system: str, user: str, max_tokens: int = 220,
+                      timeout: int = 45, temperature: float = 0.3) -> tuple[str, dict]:
     from guidance import list_and_pick_model
 
     meta: dict[str, Any] = {"ms": 0, "model": None, "source": "policy"}
@@ -37,8 +39,8 @@ async def _wandb_chat(http: aiohttp.ClientSession, system: str, user: str) -> tu
     }
     payload = {
         "model": model,
-        "temperature": 0.3,
-        "max_tokens": 220,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -50,7 +52,7 @@ async def _wandb_chat(http: aiohttp.ClientSession, system: str, user: str) -> tu
             settings.wandb_base + "/chat/completions",
             json=payload,
             headers=headers,
-            timeout=aiohttp.ClientTimeout(total=45),
+            timeout=aiohttp.ClientTimeout(total=timeout),
         ) as resp:
             data = await resp.json()
             meta["ms"] = round((time.perf_counter() - t0) * 1000, 1)
@@ -64,10 +66,10 @@ async def _wandb_chat(http: aiohttp.ClientSession, system: str, user: str) -> tu
         return "", meta
 
 
-async def _llm(sess, http, system: str, user: str) -> tuple[str, dict]:
+async def _llm(sess, http, system: str, user: str, **kw) -> tuple[str, dict]:
     try:
         async with span(sess, "coach", model="meta-llama/Llama-3.1-8B-Instruct", sponsor="wandb") as sp:
-            text, meta = await _wandb_chat(http, system, user)
+            text, meta = await _wandb_chat(http, system, user, **kw)
             sp["detail"] = (text or "fallback")[:120]
             return text, meta
     except Exception:  # noqa: BLE001
@@ -131,6 +133,8 @@ def ensure_session_coach(sess) -> None:
 
 def _project(sess):
     c = sess.coach
+    if c.get("project"):
+        return c["project"]
     return get_project(c.get("project_id") or "blink", board=c.get("board"))
 
 
@@ -161,7 +165,10 @@ def public_coach_state(sess) -> dict:
         "step_index": c["step_index"],
         "step_total": len(project["steps"]) if project else 0,
         "project": (
-            {"id": project["id"], "title": project["title"], "pitch": project["pitch"], "sketch": project.get("sketch")}
+            {"id": project["id"], "title": project["title"], "pitch": project["pitch"], "sketch": project.get("sketch"),
+             "mcu": project.get("mcu"), "board": project.get("board", c.get("board", "nano")),
+             "parts_list": project.get("parts_list") or [], "generated": bool(project.get("generated")),
+             "steps": project["steps"]}
             if project else None
         ),
         "step": step,
@@ -173,17 +180,27 @@ def public_coach_state(sess) -> dict:
     }
 
 
+_GENERIC_MISTAKES = {"led_reversed", "legs_shorted", "board_straddle", "led_overcurrent", "usb_missing"}
+
+
 def _diag(sess) -> list[dict]:
     c = sess.coach
-    project = get_project(c.get("project_id") or "blink") if c.get("project_id") else None
+    project = _project(sess) if c.get("project_id") else None
     step = step_at(project, c["step_index"]) if project else None
-    return diagnose(getattr(sess, "twin", None), getattr(sess, "findings", None), step)
+    ms = diagnose(getattr(sess, "twin", None), getattr(sess, "findings", None), step)
+    if project and project.get("id") != "blink":  # Blink-specific rules do not apply: generic checks only
+        ms = [m for m in ms if m["id"] in _GENERIC_MISTAKES]
+    return ms
 
 
-def start_project(sess, project_id: str = "blink", board: str | None = None) -> dict:
+def start_project(sess, project_id: str = "blink", board: str | None = None, project: dict | None = None) -> dict:
     ensure_session_coach(sess)
     board = normalize_board(board or sess.coach.get("board"))
-    project = get_project(project_id, board=board) or get_project("blink", board=board)
+    if project is None:
+        project = get_project(project_id, board=board) or get_project("blink", board=board)
+        sess.coach["project"] = None
+    else:
+        sess.coach["project"] = project
     sess.coach.update({
         "phase": "teaching",
         "project_id": project["id"],
@@ -193,9 +210,99 @@ def start_project(sess, project_id: str = "blink", board: str | None = None) -> 
         "board": board,
         "pending_check": None,
         "spoken_mistakes": [],
+        "store_key": None,
+        "mistakes_log": [],
+        "parts_seen": [],
+        "prompt": project.get("prompt") or "",
+    })
+    _touch(sess, True)
+    _persist(sess)
+    return public_coach_state(sess)
+
+
+def resume_project(sess, rec: dict) -> dict:
+    """Load a stored project record into the session coach."""
+    ensure_session_coach(sess)
+    project = rec["project"]
+    board = normalize_board(rec.get("board") or project.get("board"))
+    n = len(project.get("steps") or [])
+    sess.coach.update({
+        "phase": "teaching", "project": project, "project_id": project["id"], "board": board,
+        "step_index": max(0, min(n - 1, int(rec.get("step_index") or 0))), "last_tip_key": None,
+        "pending_check": None, "spoken_mistakes": [], "store_key": rec.get("key"),
+        "mistakes_log": list(rec.get("mistakes") or []), "parts_seen": list(rec.get("parts_seen") or []),
+        "prompt": rec.get("prompt") or "", "intro_sent": True,
     })
     _touch(sess, True)
     return public_coach_state(sess)
+
+
+def _persist(sess) -> None:
+    try:
+        import projects_store
+        projects_store.schedule_save(sess)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+GEN_SYSTEM = (
+    "You design beginner breadboard electronics projects. Reply with ONE strict JSON object and nothing else. "
+    "Schema: {\"id\":slug,\"title\":str,\"pitch\":str,\"mcu\":str,\"sketch\":\"Arduino sketch, max 25 lines\","
+    "\"parts_list\":[{\"type\":\"led\",\"value\":\"red\",\"qty\":1}],"
+    "\"steps\":[{\"id\":slug,\"title\":str,\"concept\":str,\"action\":str,\"teach\":str,\"why\":str,\"check\":str,"
+    "\"hole_hint\":str,\"expect\":{\"types\":[\"led\"]},\"pins\":[\"D5\",\"GND\"],"
+    "\"wires\":[{\"from\":\"D5\",\"to\":\"R1.a\",\"color\":\"#c87941\"}],\"parts\":[\"led\"]}]}. "
+    "Rules: 4 to 6 steps, last step expect {\"complete\":true} and uploads the sketch. Wires are cumulative per step (each step lists all wires so far). "
+    "Wire endpoints are only board pins or part terminals like R1.a, R1.b, LED1.a (anode), LED1.k (cathode), BTN1.a, BTN1.b. "
+    "EVERY LED needs a series resistor (220 ohm) between the pin and the LED anode; LED cathode goes to GND. "
+    "Never wire a pin directly to GND, 5V or 3V3. Short sentences, one concrete action per step."
+)
+
+
+async def generate_project(sess, http, prompt: str, board: str | None) -> tuple[dict | None, str]:
+    """LLM -> validated project. Returns (project or None, note)."""
+    board = normalize_board(board)
+    pins = ("D2..D13, A0..A5, 5V, 3V3, GND" if board == "nano"
+            else "GPIO numbers (e.g. GPIO25), 3V3, GND (no 5V, 3.3 V logic)")
+    user = f"Project: {prompt}\nBoard: {'Arduino Nano (5 V logic)' if board == 'nano' else 'ESP32 DevKit (3.3 V logic)'}\nValid board pins: {pins}"
+    last = "no llm output"
+    for attempt in range(2):
+        text, _meta = await _llm(sess, http, GEN_SYSTEM, user if attempt == 0 else user + f"\nPrevious attempt invalid: {last}. Fix it.",
+                                 max_tokens=2600, timeout=60, temperature=0.2)
+        if not text:
+            last = "no llm output"
+            continue
+        try:
+            proj = curriculum.parse_project(text, board, prompt)
+            return proj, "generated"
+        except Exception as e:  # noqa: BLE001
+            last = f"{type(e).__name__}: {e}"[:160]
+            log.warning("project generation invalid: %s", last)
+    return None, last
+
+
+async def start_generated(sess, http, prompt: str, board: str | None) -> tuple[dict, str, bool]:
+    """Returns (coach_state, note_for_user, ok). Falls back to Blink on failure."""
+    proj, why = await generate_project(sess, http, prompt, board)
+    if proj:
+        return start_project(sess, proj["id"], board=board, project=proj), f"I designed a custom project: {proj['title']}. {proj['pitch']}", True
+    st = start_project(sess, "blink", board=board)
+    return st, "I couldn't generate a safe custom circuit for that, so let's start with Blink and build from there.", False
+
+
+_BUILD_RE = __import__("re").compile(
+    r"\b(?:i\s+(?:want|wanna|would like|'d like|need)\s+to\s+(?:build|make|create|wire)|let'?s\s+(?:build|make)|"
+    r"(?:build|make|create)\s+(?:me\s+)?(?:a|an|the))\s+(?P<what>.+)", __import__("re").I)
+
+
+def extract_build_request(text: str) -> str | None:
+    m = _BUILD_RE.search(text or "")
+    if not m:
+        return None
+    what = m.group("what").strip(" .!?")
+    if not what or what.lower().startswith("blink"):
+        return None
+    return what
 
 
 def advance_step(sess, delta: int = 1) -> dict:
@@ -207,6 +314,7 @@ def advance_step(sess, delta: int = 1) -> dict:
     sess.coach["step_index"] = max(0, min(n - 1, sess.coach["step_index"] + delta))
     sess.coach["last_tip_key"] = None
     _touch(sess, True)
+    _persist(sess)
     return public_coach_state(sess)
 
 
@@ -217,6 +325,7 @@ def set_step(sess, index: int) -> dict:
         sess.coach["step_index"] = max(0, min(len(project["steps"]) - 1, index))
         sess.coach["last_tip_key"] = None
         _touch(sess, True)
+        _persist(sess)
     return public_coach_state(sess)
 
 
@@ -250,7 +359,7 @@ async def teach_current_step(sess, http: aiohttp.ClientSession, *, force: bool =
         "Start by saying what you SEE (observation / placements / hole letters) using ONLY the twin below. "
         "If twin.scene is 'other' or there are no components, say plainly that you cannot see the board yet "
         "and ask them to point the camera at the Nano/ESP32 and breadboard; NEVER invent parts or wiring. Then "
-        f"give ONE concrete next wire action for {project['mcu']} Blink. "
+        f"give ONE concrete next wire action for the {project['title']} project on {project['mcu']}. "
         "Do NOT recite the whole plan. Max 4 short sentences. Name the signal pin and GND correctly. Then one short sentence on WHY. "
         "If placements list breadboard holes (e.g. E12), mention whether they look right for this step."
     )
@@ -301,7 +410,11 @@ async def converse(sess, http: aiohttp.ClientSession, question: str) -> dict:
     board_word = "esp32" if ("esp" in low) else ("nano" if ("nano" in low or "arduino" in low) else None)
     if board_word and sess.coach["phase"] == "teaching" and sess.coach.get("board") != board_word and any(
             w in low for w in ("use", "switch", "i have", "i'm using", "im using", "esp32", "esp 32")):
-        st = start_project(sess, sess.coach.get("project_id") or "blink", board=board_word)
+        cur_p = sess.coach.get("project")
+        if cur_p and cur_p.get("generated"):
+            st, _n, _ok = await start_generated(sess, http, cur_p.get("prompt") or cur_p["title"], board_word)
+        else:
+            st = start_project(sess, sess.coach.get("project_id") or "blink", board=board_word)
         tip = await teach_current_step(sess, http, force=True)
         return _msg(sess, f"Switched to {board_word.upper()}. " + ((tip or {}).get("text") or ""), ["step_orient"])
 
@@ -309,6 +422,15 @@ async def converse(sess, http: aiohttp.ClientSession, question: str) -> dict:
     if pc and sess.coach["phase"] == "teaching" and q and not any(w in low for w in ("next", "back", "previous")):
         sess.coach["pending_check"] = None
         return _msg(sess, _grade_check(pc, q), ["chat"], "curriculum")
+
+    # Free-text "I want to build a ..." -> generate any project
+    what = extract_build_request(q)
+    if what and (sess.coach["phase"] == "ask_project" or not any(w in low for w in ("next", "back"))):
+        st, note, _ok = await start_generated(sess, http, what, board_word or sess.coach.get("board"))
+        tip = await teach_current_step(sess, http, force=True)
+        return {"type": "guidance", "text": (note + " " + ((tip or {}).get("text") or "")).strip(),
+                "finding_ids": (tip or {}).get("finding_ids") or [], "source": (tip or {}).get("source") or "curriculum",
+                "ms": (tip or {}).get("ms"), "coach": public_coach_state(sess)}
 
     # Project selection / demo path
     if sess.coach["phase"] == "ask_project":
@@ -380,7 +502,7 @@ async def converse(sess, http: aiohttp.ClientSession, question: str) -> dict:
     step = step_at(project, sess.coach["step_index"]) if project else None
     system = (
         "You are CURRENT, a proactive electronics teacher. "
-        "Answer the student's spoken question using the active Blink step and vision twin. "
+        "Answer the student's spoken question using the active project step and vision twin. "
         "Be concrete about pins and polarity. 2-4 short sentences. No full plan dump."
     )
     user = json.dumps({
@@ -467,6 +589,9 @@ async def mistake_alert(sess, http) -> dict | None:
             if key not in spoken:
                 spoken.append(key)
                 _touch(sess)
+                sess.coach.setdefault("mistakes_log", []).append(
+                    {"id": m["id"], "title": m["title"], "step": sess.coach["step_index"], "ts": time.time()})
+                _persist(sess)
                 msg = _mistake_msg(sess, m)
                 try:  # Cosmos-Embed1 memory: have we seen this mistake before?
                     from sponsors import embed_memory
@@ -522,6 +647,16 @@ async def on_twin_update(sess, http: aiohttp.ClientSession) -> dict | None:
     al = await mistake_alert(sess, http)
     if al:
         return al
+    try:
+        import projects_store
+        before = list(sess.coach.get("parts_seen") or [])
+        if projects_store.parts_seen(sess) != before:
+            sess.coach["parts_seen"] = projects_store.parts_seen(sess)
+            _persist(sess)
+    except Exception:  # noqa: BLE001
+        pass
+    if project.get("id") != "blink":  # no blink heuristics for custom projects; user says "next"
+        return await teach_current_step(sess, http, force=False)
     suggested = infer_step_from_twin(project, sess.twin)
     idx = sess.coach["step_index"]
     if suggested > idx and suggested <= idx + 1:
