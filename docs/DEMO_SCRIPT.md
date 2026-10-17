@@ -8,7 +8,7 @@ Round 1 = 2 min at the table. Top 5 = 3 min on stage. Demos beat slides: the jud
 ## Pitch points (map to criteria)
 - **Idea:** Not a chatbot you ask. Always-on and proactive: it teaches step by step, interrupts on mistakes, and asks "Ready for the next step? Say next" instead of racing ahead. Every spoken warning is gated by a deterministic verifier (11 named mistake detectors in `app/mistakes.py`); the LLM only phrases verified facts.
 - **Technical:** Camera -> YOLO11 gate (~75 ms) -> Cosmos3-Reason (2.7-4.5 s) -> verifier -> W&B Llama coach. Voice: Canary ASR ~0.3 s, coach reply ~0.6 s. The coach speaks a mistake only after two consecutive agreeing analyses, so there are no flickery false alarms.
-- **Design:** 3D digital twin mirrors the real parts live, animates the fix (arrow moving the wire), spin toolbar. Right-hand "Trace" trace shows every sponsor call with its latency. Hidden step menu lets a human override the AI.
+- **Design:** 3D digital twin mirrors the real parts live, animates the fix (arrow moving the wire), spin toolbar. The right-hand Trace tab shows every sponsor call with its latency. Hidden step menu lets a human override the AI.
 - **Impact (sponsor tools, 7 visible):** NVIDIA Cosmos3-Reason, YOLO11, Canary-1B, Cosmos-Embed1 (all on CoreWeave GPUs), W&B Inference, VAST S3 (+ VSS search). Projects and twin state persist in VAST, so it resumes: "Welcome back, we were on step 4... you had the LED backwards last time."
 - **Presentation:** The judge is the demo. They sabotage a real board.
 
@@ -26,7 +26,7 @@ Round 1 = 2 min at the table. Top 5 = 3 min on stage. Demos beat slides: the jud
 ## 2-minute demo (table)
 | Time | Presenter says (exact) | Judge does | Screen shows | Sponsor firing (point to it) |
 |---|---|---|---|---|
-| 0:00-0:10 | "This is CURRENT. A real Arduino Nano, a camera, and a teacher that never looks away. Watch the right side." | Nothing yet | Live camera, YOLO boxes, 3D twin building the Nano, LED, resistor | **YOLO11 ~75 ms**, **Cosmos3-Reason** spans in trace (CoreWeave chip) |
+| 0:00-0:10 | "This is CURRENT. A real Arduino Nano, a camera, and a teacher that never looks away. Watch the Trace tab on the right." | Nothing yet | Live camera, YOLO boxes, 3D twin building the Nano, LED, resistor | **YOLO11 ~75 ms**, **Cosmos3-Reason** spans in trace (CoreWeave chip) |
 | 0:10-0:25 | "It sees the board, LED colour, resistor. That 3D twin is built from the camera, not from a script. Judge, hand me nothing: you break it. Pull the LED out and plug it in **backwards**." | Flips the LED (long leg to GND side) | Twin LED flips; trace shows cosmos pass | **Cosmos3-Reason** parts + led_lit |
 | 0:25-0:40 | "Notice it waits for two matching looks, so no false alarms. Three... two..." | Hands out of frame, holds still | Pipeline lights Frame -> YOLO -> Cosmos -> Coach; red finding "LED is backwards" | Verifier (local), then **W&B Inference** coach span |
 | 0:40-0:55 | (silent, let it speak) | Listens | Voice: "Stop. Your LED is backwards... long leg faces the resistor side." Twin animates the fix arrow | **W&B Inference** phrasing; browser TTS. **WOW 1** |
