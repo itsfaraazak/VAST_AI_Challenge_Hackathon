@@ -80,6 +80,20 @@ function mistakeBanner(mistakes) {
 }
 setInterval(() => mistakeBanner(coach?.mistakes || []), 1000);   // re-evaluate the debounce even without new messages
 
+const PREVIEW_STEPS = [
+  ["Orient the board", "Seat the Nano across the centre channel so each pin has its own row."],
+  ["Seat the LED", "Place the LED, long leg toward the resistor side."],
+  ["Add 220Ω resistor", "Resistor from the D13 row to the LED anode row."],
+  ["Close the circuit to GND", "Jumper the LED cathode row to a GND pin."],
+  ["Run Blink", "Upload File > Examples > Basics > Blink."],
+];
+function renderPreview() {
+  // Before a project starts, show the Blink plan as steps 01-05; clicking any step starts it.
+  $("stepList").innerHTML = PREVIEW_STEPS.map((st, i) =>
+    `<li class="step is-next" data-project="blink" title="${esc(st[1])}"><b>${String(i + 1).padStart(2, "0")}</b><span class="st"><i>${esc(st[0])}</i><em>${esc(st[1])}</em></span></li>`).join("");
+  $("whyBox").innerHTML = "<b>PLAN ›</b> Blink on Arduino Nano: click any step (or say “Blink”) to start.";
+}
+renderPreview();   // default view: steps are visible from the first paint
 function applyCoach(state) {
   if (!state) return;
   coach = { ...(coach || {}), ...state };
@@ -101,9 +115,7 @@ function applyCoach(state) {
     $("whyBox").innerHTML = why ? `<b>WHY ›</b> ${esc(why)}` : "";
     $("vizHint").textContent = cur?.title || "3D circuit";
   } else {
-    $("stepList").innerHTML = (state.projects || []).map((pr, i) =>
-      `<li class="step" data-project="${esc(pr.id)}"><b>${String(i + 1).padStart(2, "0")}</b>${esc(pr.title)}</li>`).join("");
-    $("whyBox").textContent = "";
+    renderPreview();
   }
   mistakeBanner(state.mistakes || []);
   feedScene({ coach: state });
