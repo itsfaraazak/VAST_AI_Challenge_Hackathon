@@ -199,6 +199,9 @@ async def _handle_msg(sess, role: str, data: dict, http: aiohttp.ClientSession) 
             "ms": (tip or {}).get("ms"),
             "coach": st,
         })
+    elif typ == "sketch_request":
+        from code_routes import sketch_message
+        await sketch_message(sess, data, http)
     elif typ == "projects_list":
         items = await projects_store.list_projects(sess)
         await sess.broadcast({"type": "projects", "items": items or []})
@@ -395,6 +398,7 @@ def create_app() -> web.Application:
     app.router.add_get("/api/vss-limits", api_upload_limits)
     app.router.add_get("/api/projects", api_projects)
     app.router.add_get("/", index)
+    from code_routes import register; register(app)  # sketch + agent-state routes
     # CURRENT frontend assets at /app.js /styles.css (relative to index)
     if UI_ROOT.exists():
         async def _asset(request: web.Request) -> web.FileResponse:

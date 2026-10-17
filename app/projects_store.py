@@ -49,6 +49,7 @@ def snapshot(sess) -> dict | None:
         "board": c.get("board", "nano"), "project": deepcopy(project), "step_index": c["step_index"],
         "steps_total": len(project["steps"]), "parts_seen": c["parts_seen"],
         "mistakes": list(c.get("mistakes_log") or [])[-30:], "updated_iso": _iso(),
+        "sketch": c.get("sketch_text"),
     }
 
 
