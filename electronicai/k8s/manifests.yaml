@@ -1,0 +1,80 @@
+# Deployment + Service + Ingress for ElectronicAI.
+# Placeholders (__APP_NAME__, __APP_PORT__, __APP_HOST__) are filled by deploy.sh.
+# Follows deploy-app-no-registry: public image, code from ConfigMap, creds from Secret,
+# Ingress host = team host, path = /app (nginx rewrite strips the prefix → app sees /).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: __APP_NAME__
+  labels: { app: __APP_NAME__ }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: __APP_NAME__ }
+  template:
+    metadata:
+      labels: { app: __APP_NAME__ }
+    spec:
+      containers:
+      - name: app
+        image: python:3.12-slim
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: __APP_PORT__
+        env:
+        - name: PORT
+          value: "__APP_PORT__"
+        envFrom:
+        - secretRef:
+            name: __APP_NAME__-secrets
+        volumeMounts:
+        - name: code
+          mountPath: /code
+        workingDir: /code
+        command: ["bash", "-c"]
+        args:
+        - |
+          set -euo pipefail
+          pip install --no-cache-dir -q -r requirements.txt
+          exec python main.py
+        readinessProbe:
+          httpGet: { path: /health, port: __APP_PORT__ }
+          initialDelaySeconds: 15
+          periodSeconds: 10
+      volumes:
+      - name: code
+        configMap:
+          name: __APP_NAME__-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: __APP_NAME__
+  labels: { app: __APP_NAME__ }
+spec:
+  selector: { app: __APP_NAME__ }
+  ports:
+  - name: http
+    port: 80
+    targetPort: __APP_PORT__
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: __APP_NAME__
+  labels: { app: __APP_NAME__ }
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: __APP_HOST__
+    http:
+      paths:
+      - path: /app(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: __APP_NAME__
+            port: { number: 80 }
