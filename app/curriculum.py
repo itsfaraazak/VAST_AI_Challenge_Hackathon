@@ -205,3 +205,176 @@ def infer_step_from_twin(project: dict, twin: dict | None) -> int:
     if types:
         return 1
     return 0
+
+
+# ---------------------------------------------------------------------------
+# LLM-generated projects: parse, repair, validate
+# ---------------------------------------------------------------------------
+import json as _json
+import re as _re
+
+MAX_STEPS = 7
+_NANO_PINS = {f"D{i}" for i in range(2, 14)} | {f"A{i}" for i in range(6)} | {"5V", "3V3", "GND", "VIN"}
+_POWER = {"5V", "3V3", "VIN"}
+_PART_RE = _re.compile(r"^[A-Za-z]{1,6}\d{0,2}\.[A-Za-z0-9]{1,2}$")
+_COLORS = ["#c87941", "#d6ff4b", "#5b8def", "#ff6b6b", "#b48cff", "#4bd6c8"]
+
+
+def slugify(text: str) -> str:
+    s = _re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return (s[:32].strip("-")) or "project"
+
+
+def repair_json(text: str) -> str:
+    """Salvage fenced / truncated JSON (same idea as perception.cosmos._repair)."""
+    t = (text or "").strip()
+    t = _re.sub(r"^```(?:json)?\s*|\s*```$", "", t)
+    i = t.find("{")
+    if i < 0:
+        return t
+    t = t[i:]
+    try:
+        _json.loads(t)
+        return t
+    except ValueError:
+        pass
+    for cut in range(len(t), 0, -1):
+        if t[cut - 1] not in ",]}":
+            continue
+        cand = t[:cut].rstrip(",")
+        stack, in_str, esc = [], False, False
+        for ch in cand:
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            elif ch in "{[":
+                stack.append("}" if ch == "{" else "]")
+            elif ch in "}]" and stack:
+                stack.pop()
+        if in_str:
+            continue
+        try:
+            _json.loads(cand + "".join(reversed(stack)))
+            return cand + "".join(reversed(stack))
+        except ValueError:
+            continue
+    return t
+
+
+def norm_endpoint(ep, board: str) -> str | None:
+    """Return canonical endpoint or None if invalid for this board."""
+    e = str(ep or "").strip().replace(" ", "")
+    if not e:
+        return None
+    u = e.upper()
+    if "." in u:
+        return u if _PART_RE.match(e) and not u.startswith(("D13.", "GPIO")) else None
+    if u in ("GND", "3V3", "5V", "VIN"):
+        if board == "esp32" and u in ("5V", "VIN"):
+            return None
+        return u
+    if board == "nano":
+        return u if u in _NANO_PINS else None
+    m = _re.match(r"^(?:GPIO|IO|D)(\d{1,2})$", u)
+    if m and int(m.group(1)) <= 39:
+        return f"GPIO{int(m.group(1))}"
+    return None
+
+
+def _clean_wires(wires, board: str) -> list[dict]:
+    out = []
+    for i, w in enumerate(wires if isinstance(wires, list) else []):
+        if not isinstance(w, dict):
+            raise ValueError("wire not an object")
+        a, b = norm_endpoint(w.get("from"), board), norm_endpoint(w.get("to"), board)
+        if not a or not b:
+            raise ValueError(f"bad wire endpoint {w.get('from')}->{w.get('to')} for {board}")
+        if a == b:
+            raise ValueError("wire loops to itself")
+        pins = [x for x in (a, b) if "." not in x]
+        if len(pins) == 2:  # pin-to-pin jumper: shorts if any side is a rail or both are rails
+            if (a in _POWER | {"GND"}) and (b in _POWER | {"GND"}):
+                raise ValueError(f"short {a}-{b}")
+            if a in _POWER | {"GND"} or b in _POWER | {"GND"}:
+                raise ValueError(f"pin shorted to rail {a}-{b}")
+        col = w.get("color") if isinstance(w.get("color"), str) and w["color"].startswith("#") else _COLORS[i % len(_COLORS)]
+        out.append({"from": a, "to": b, "color": col})
+    return out
+
+
+def validate_project(raw: dict, board: str, prompt: str = "") -> dict:
+    """Coerce an LLM dict into the BLINK_PROJECT shape or raise ValueError."""
+    if not isinstance(raw, dict):
+        raise ValueError("not an object")
+    board = normalize_board(board)
+    steps_in = raw.get("steps")
+    if not isinstance(steps_in, list) or len(steps_in) < 2:
+        raise ValueError("need >=2 steps")
+    steps = []
+    for i, s in enumerate(steps_in[:MAX_STEPS]):
+        if not isinstance(s, dict):
+            raise ValueError("step not an object")
+        wires = _clean_wires(s.get("wires"), board)
+        pins = []
+        for p in s.get("pins") or []:
+            q = norm_endpoint(p, board)
+            if q and "." not in q:
+                pins.append(q)
+        t = lambda k, d="": str(s.get(k) or d).strip()[:400]  # noqa: E731
+        exp = s.get("expect") if isinstance(s.get("expect"), dict) else {}
+        steps.append({
+            "id": slugify(t("id", f"step{i + 1}")) or f"step{i + 1}",
+            "title": t("title", f"Step {i + 1}"),
+            "concept": t("concept"), "action": t("action", t("title")),
+            "teach": t("teach"), "why": t("why"), "check": t("check"),
+            "hole_hint": t("hole_hint"), "expect": exp, "pins": pins, "wires": wires,
+            "parts": [str(x)[:24] for x in (s.get("parts") or []) if isinstance(x, (str, int))][:8],
+        })
+    if len({s["id"] for s in steps}) != len(steps):
+        for i, s in enumerate(steps):
+            s["id"] = f"{s['id']}-{i + 1}"
+    steps[-1]["expect"] = steps[-1]["expect"] or {"complete": True}
+    # safety: every LED must have a series resistor somewhere in the wiring
+    allw = [w for s in steps for w in s["wires"]]
+    ends = {e for w in allw for e in (w["from"], w["to"])}
+    plist = raw.get("parts_list") if isinstance(raw.get("parts_list"), list) else []
+    has_led = any(e.startswith("LED") for e in ends) or any(
+        isinstance(p, dict) and "led" in str(p.get("type", "")).lower() for p in plist)
+    if has_led and not any(e.startswith("R") and "." in e for e in ends):
+        raise ValueError("LED without a series resistor")
+    # LED anode must not wire straight to a pin/rail
+    for w in allw:
+        for x, y in ((w["from"], w["to"]), (w["to"], w["from"])):
+            if x.startswith("LED") and x.endswith(".A") and "." not in y and y != "GND":
+                raise ValueError("LED anode wired straight to a pin (no resistor)")
+    title = str(raw.get("title") or prompt or "Custom project").strip()[:80]
+    pl = []
+    for p in plist[:12]:
+        if isinstance(p, dict):
+            try:
+                qty = max(1, min(20, int(p.get("qty") or 1)))
+            except (TypeError, ValueError):
+                qty = 1
+            pl.append({"type": str(p.get("type", ""))[:30], "value": str(p.get("value", ""))[:20], "qty": qty})
+    sketch = "\n".join(str(raw.get("sketch") or "").splitlines()[:25])
+    return {
+        "id": slugify(str(raw.get("id") or title)),
+        "title": title, "pitch": str(raw.get("pitch") or "")[:200],
+        "mcu": str(raw.get("mcu") or BOARDS[board]["name"])[:60],
+        "sketch": sketch, "parts_list": pl, "board": board, "generated": True,
+        "prompt": prompt[:200], "steps": steps,
+    }
+
+
+def parse_project(text: str, board: str, prompt: str = "") -> dict:
+    return validate_project(_json.loads(repair_json(text)), board, prompt)
+
+
+def is_generic_project(project: dict | None) -> bool:
+    return bool(project) and project.get("id") != "blink"
