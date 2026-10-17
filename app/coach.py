@@ -194,6 +194,12 @@ def _diag(sess) -> list[dict]:
     if project and project.get("id") != "blink":  # Blink-specific rules do not apply: generic checks only
         ms = [m for m in ms if m["id"] in _GENERIC_MISTAKES]
     dismissed = set(c.get("dismissed") or [])
+    # A fault only counts once its part has been introduced: a missing resistor on step 1 is not a mistake yet,
+    # and an earlier step that passed never turns into a failure again.
+    first_step = {"led_reversed": 1, "resistor_missing": 2, "resistor_to_5v": 2, "not_same_strip": 2, "gnd_missing": 3}
+    idx = c.get("step_index", 0)
+    if project and project.get("id") == "blink":
+        ms = [m for m in ms if idx >= first_step.get(m["id"], 1)]
     return [m for m in ms if m["id"] not in dismissed]
 
 
@@ -601,7 +607,7 @@ def _celebrate(sess, done_step: dict) -> dict:
 
 def _mistake_msg(sess, m: dict) -> dict:
     seen = sess.twin.get("observation") if isinstance(sess.twin, dict) else None
-    text = f"I see {m['title'].lower()}. That matters because {m['explain']} {m['fix']}"
+    text = f"It looks like {m['title'].lower()}, though I could be wrong. If it is: {m['fix']}"
     ids = [m["id"]]
     return _msg(sess, text, ids, "verifier", mistakes=public_mistakes([m]), what_i_see=seen)
 

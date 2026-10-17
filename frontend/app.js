@@ -51,30 +51,34 @@ $("btnVoice").onclick = () => {
 };
 
 /* ---------- coach state ---------- */
+/* Calm, non-blocking note. Vision is often wrong, so: debounce, never cover the 3D view, one tap to dismiss. */
+const dismissedIds = new Set(); let issueSince = 0, issueKey = "", okTimer = null;
 function mistakeBanner(mistakes) {
   const box = $("mistake");
-  const n = mistakes.length;
-  if (n) {
-    const m = mistakes[0];
-    box.hidden = false; box.classList.remove("fixed");
-    $("mistakeTag").textContent = `${(m.severity || "error").toUpperCase()} DETECTED${n > 1 ? ` · +${n - 1} more` : ""}`;
+  const list = (mistakes || []).filter((m) => !dismissedIds.has(m.id));
+  const key = list.map((m) => m.id).join(",");
+  if (key !== issueKey) { issueKey = key; issueSince = list.length ? Date.now() : 0; }
+  const stable = list.length && Date.now() - issueSince >= 5000;   // must persist 5 s before we say anything
+  if (stable) {
+    const m = list[0];
+    box.hidden = false; box.classList.remove("fixed"); clearTimeout(okTimer);
+    $("mistakeTag").textContent = "POSSIBLE ISSUE";
     $("mistakeTitle").textContent = m.title || m.id;
-    $("mistakeFix").textContent = m.fix ? `FIX: ${m.fix}` : "";
-    if (!prevMistakes) { $("flashfx").className = "flashfx"; void $("flashfx").offsetWidth; $("flashfx").className = "flashfx red"; window.CurrentScene?.flash?.("error"); }
-    setVerify(`${n} ISSUE${n > 1 ? "S" : ""}`, "bad");
-  } else if (prevMistakes) {
-    box.hidden = false; box.classList.add("fixed");
-    $("mistakeTag").textContent = "CORRECTED";
-    $("mistakeTitle").textContent = "Circuit verified ✓";
+    $("mistakeFix").innerHTML = (m.fix ? esc(m.fix) + " " : "") + '<button type="button" class="note__x" id="noteX">Looks fine to me ✕</button>';
+    $("noteX").onclick = () => { list.forEach((x) => dismissedIds.add(x.id)); box.hidden = true; send({ type: "override", action: "dismiss" }); };
+    setVerify("CHECK", "bad");
+  } else if (!list.length && !box.hidden && !box.classList.contains("fixed") && prevMistakes) {
+    box.classList.add("fixed");
+    $("mistakeTag").textContent = "ALL GOOD";
+    $("mistakeTitle").textContent = "Looks right ✓";
     $("mistakeFix").textContent = "";
-    $("flashfx").className = "flashfx"; void $("flashfx").offsetWidth; $("flashfx").className = "flashfx green";
-    window.CurrentScene?.flash?.("ok");
-    window.gsap?.fromTo(box, { scale: 1.15 }, { scale: 1, duration: 0.5, ease: "back.out(2)" });
     setVerify("OK", "ok");
-    setTimeout(() => { if (box.classList.contains("fixed")) box.hidden = true; }, 3200);
-  } else if (!coach?.step) setVerify("—");
-  prevMistakes = n;
+    okTimer = setTimeout(() => { box.hidden = true; box.classList.remove("fixed"); }, 2500);
+  } else if (!list.length && !coach?.step) setVerify("—");
+  else if (!list.length && !box.classList.contains("fixed")) box.hidden = true;
+  prevMistakes = list.length;
 }
+setInterval(() => mistakeBanner(coach?.mistakes || []), 1000);   // re-evaluate the debounce even without new messages
 
 function applyCoach(state) {
   if (!state) return;
@@ -90,7 +94,8 @@ function applyCoach(state) {
   $("railBar").style.width = total ? ((idx + (state.done ? 1 : 0.4)) / total) * 100 + "%" : "0";
   if (state.phase === "teaching" && steps.length) {
     $("stepList").innerHTML = steps.map((s, i) =>
-      `<li class="step ${i < idx ? "is-done" : i === idx ? "is-active" : ""}" data-index="${i}"><b>${String(i + 1).padStart(2, "0")}</b>${esc(s.title)}</li>`).join("");
+      `<li class="step ${i < idx ? "is-done" : i === idx ? "is-active" : "is-next"}" data-index="${i}" title="${esc(s.action || "")}"><b>${String(i + 1).padStart(2, "0")}</b><span class="st"><i>${esc(s.title)}</i><em>${esc(s.action || s.concept || "")}</em></span></li>`).join("");
+    $("btnNext")?.classList.toggle("ready", !!state.awaiting_next);
     const cur = state.step || steps[idx];
     const why = cur?.why || cur?.concept;
     $("whyBox").innerHTML = why ? `<b>WHY ›</b> ${esc(why)}` : "";

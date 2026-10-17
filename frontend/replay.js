@@ -65,7 +65,7 @@ async function script(my) {
   stage = 1; bad = true;                                     // LED placed backwards
   await perceive("LED inserted, long leg toward GND row"); if (!alive()) return;
   app.onBackend({ type: "coach", ...coachState(1, { mistakes: [MISTAKE] }) });
-  say("Stop. Your LED is backwards. The long leg is the anode and must face the resistor side. Flip it around.", "verifier");
+  say("This LED may be backwards. The long leg is the anode and should face the resistor side.", "verifier");
   await sleep(7500); if (!alive()) return;
 
   bad = false;                                               // child fixes it

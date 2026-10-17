@@ -105,13 +105,16 @@ class CoachTests(unittest.TestCase):
         s = sess()
         coach.start_project(s, "blink")
         s.twin = tw([("nano", "arduino"), ("d1", "led")], [["nano.D13", "d1.a"], ["d1.k", "nano.GND"]])
+        s.last_cosmos_ts = 0.5
+        self.assertIsNone(run(coach.tick(s, None)))  # resistor not introduced yet (step 1): not a mistake
+        coach.set_step(s, 2)
         s.last_cosmos_ts = 1.0
         self.assertIsNone(run(coach.tick(s, None)))  # one analysis is not enough: nets wobble
         s.last_cosmos_ts = 2.0  # second consecutive analysis agrees
         m = run(coach.tick(s, None))
         self.assertEqual(m["finding_ids"], ["resistor_missing"])
         self.assertIsNone(run(coach.tick(s, None)))  # not repeated
-        self.assertEqual(s.coach["spoken_mistakes"], ["resistor_missing@0"])
+        self.assertEqual(s.coach["spoken_mistakes"], ["resistor_missing@2"])
         s.twin = None
         s.coach["last_act_ts"] = time.time() - 30
         h1 = run(coach.tick(s, None))
