@@ -320,11 +320,17 @@ async function pushFrame() {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.detail || "frame failed");
     renderSteps(data.steps);
+    const seeing = data.reliable
+      ? `seeing · ${data.raw?.board || "board"}`
+      : "no electronics yet";
+    feedSource.textContent = `${feedSource.dataset.camera || "camera"} · ${seeing}`;
+
     for (const alert of data.alerts || []) {
       addMessage("system", escapeHtml(alert.text || ""));
       if (alert.speak) speak(alert.text || "");
     }
-    if (data.advice && data.advice !== lastAdvice) {
+    // Only speak placement tips when Cosmos actually sees the bench
+    if (data.reliable && data.advice && data.advice !== lastAdvice) {
       lastAdvice = data.advice;
       addMessage("agent", escapeHtml(data.advice));
     }
@@ -368,7 +374,8 @@ async function startCamera(deviceId) {
 
   const track = mediaStream.getVideoTracks()[0];
   const label = track?.label || "camera";
-  feedSource.textContent = label;
+  feedSource.dataset.camera = label;
+  feedSource.textContent = `${label} · waiting for board`;
   preferredDeviceId =
     track?.getSettings?.().deviceId || deviceId || preferredDeviceId;
 

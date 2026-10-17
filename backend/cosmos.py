@@ -10,15 +10,23 @@ import urllib.request
 
 DEFAULT_HOST = "166.19.38.112"
 PROMPT = (
-    "You are CURRENT, a bench partner looking at one still of an Arduino electronics build. "
-    "Focus on Nano/Uno, breadboard, LEDs, resistors, jumper wires, and pin headers. "
+    "Look at THIS still image only. Do not invent parts that are not clearly visible. "
+    "If there is no Arduino, breadboard, LED, resistor, or jumper wire in the frame, "
+    "set board to \"unknown\", components to [], wires to [], pins_used to [], "
+    "risks to [], placement_advice to \"\", and summary to a short honest description of what is actually in the frame "
+    "(desk, hands, laptop, empty view, etc.). "
+    "If electronics ARE visible, be specific about pins and placement. "
     "Reply with ONLY compact JSON (no markdown): "
-    '{"board":"nano|uno|unknown","components":["..."],'
-    '"wires":[{"color":"","from":"","to":""}],"pins_used":["D13","GND"],'
-    '"action":"placing|wiring|idle|testing",'
+    '{"visible_electronics":true|false,'
+    '"board":"nano|uno|unknown",'
+    '"components":["LED","resistor","breadboard","jumper","usb"],'
+    '"wires":[{"color":"","from":"","to":""}],'
+    '"pins_used":["D13","GND"],'
+    '"action":"placing|wiring|idle|testing|none",'
     '"risks":["no_resistor_on_LED","wrong_pin","possible_short","usb_while_rewiring"],'
-    '"summary":"one sentence of what you see",'
-    '"placement_advice":"one concrete next placement tip for LED/resistor/jumpers"}'
+    '"confidence":0.0,'
+    '"summary":"what is actually visible",'
+    '"placement_advice":"only if electronics are visible; else empty"}'
 )
 
 
@@ -70,18 +78,17 @@ class CosmosClient:
         self._model_ready = True
         return self.model
 
-    def reason_image(self, jpeg_b64: str, extra: str = "") -> dict:
+    def reason_image(self, jpeg_b64: str) -> dict:
         model = self.ensure_model()
-        text = PROMPT if not extra else PROMPT + "\n" + extra
         payload = {
             "model": model,
             "temperature": 0,
-            "max_tokens": 280,
+            "max_tokens": 220,
             "messages": [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": text},
+                        {"type": "text", "text": PROMPT},
                         {
                             "type": "image_url",
                             "image_url": {"url": f"data:image/jpeg;base64,{jpeg_b64}"},
@@ -131,12 +138,14 @@ def _parse_jsonish(text: str) -> dict:
         except json.JSONDecodeError:
             pass
     return {
+        "visible_electronics": False,
         "board": "unknown",
         "components": [],
         "wires": [],
         "pins_used": [],
-        "action": "idle",
+        "action": "none",
         "risks": [],
+        "confidence": 0.0,
         "summary": cleaned[:400],
         "placement_advice": "",
     }

@@ -1,4 +1,4 @@
-"""Live bench session: camera frames → Cosmos, VAST captions as few-shot examples."""
+"""Live bench session: camera frames → Cosmos. VAST captions only for chat few-shot."""
 
 from __future__ import annotations
 
@@ -16,6 +16,16 @@ import vss
 
 WAND_BASE = "https://api.inference.wandb.ai/v1"
 WAND_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
+STREAK_NEEDED = 2
+
+# Structured evidence required before a step can complete.
+STEP_EVIDENCE = {
+    "led": ("led",),
+    "resistor": ("resistor",),
+    "signal": ("jumper", "wire", "d13", "pin 13", "pin13"),
+    "gnd": ("gnd", "ground"),
+    "flash": ("usb", "blink", "upload", "ide"),
+}
 
 
 class LiveSession:
@@ -27,7 +37,6 @@ class LiveSession:
         self.resistor_seen = False
         self.usb_connected = False
         self.warn_at: dict[str, float] = {}
-        self.last_support = {step["id"]: False for step in rules.STEPS}
         self.streak = {step["id"]: 0 for step in rules.STEPS}
         self.notes: list[dict] = []
         self.last_caption = ""
@@ -36,9 +45,10 @@ class LiveSession:
         self.examples: list[str] = []
         self._examples_loaded = False
         self.started = time.time()
+        self.frames_seen = 0
+        self.frames_reliable = 0
 
     def public(self) -> dict:
-        self._ensure_examples()
         with self._lock:
             return {
                 "mode": "live",
@@ -47,6 +57,8 @@ class LiveSession:
                 "advice": self.last_advice,
                 "circuit": self._circuit(),
                 "example_count": len(self.examples),
+                "frames_seen": self.frames_seen,
+                "frames_reliable": self.frames_reliable,
             }
 
     def _steps(self) -> list[dict]:
@@ -60,7 +72,15 @@ class LiveSession:
                 active_set = True
             else:
                 state = "pending"
-            rows.append({"id": step["id"], "title": step["title"], "state": state})
+            rows.append(
+                {
+                    "id": step["id"],
+                    "title": step["title"],
+                    "state": state,
+                    "streak": self.streak.get(step["id"], 0),
+                    "need": STREAK_NEEDED,
+                }
+            )
         return rows
 
     def _circuit(self) -> dict:
@@ -70,6 +90,7 @@ class LiveSession:
         return {"components": note.get("components") or [], "connections": note.get("connections") or []}
 
     def _ensure_examples(self) -> None:
+        """VAST examples are for chat only — never for vision."""
         if self._examples_loaded:
             return
         with self._lock:
@@ -84,7 +105,6 @@ class LiveSession:
                     excerpts.extend(self.vss.search_captions(query, location, top_k=6))
                 except vss.VssError:
                     continue
-            # de-dupe preserve order
             seen: set[str] = set()
             unique: list[str] = []
             for text in excerpts:
@@ -96,32 +116,99 @@ class LiveSession:
             self.examples = unique[:8]
             self._examples_loaded = True
 
-    def analyze_frame(self, jpeg_b64: str) -> dict:
-        self._ensure_examples()
-        extra = ""
-        if self.examples:
-            extra = "Prior indexed bench examples (style reference only):\n- " + "\n- ".join(self.examples[:4])
+    @staticmethod
+    def _norm_list(values: object) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        return [str(v).strip().lower() for v in values if str(v).strip()]
+
+    def _frame_is_reliable(self, raw: dict) -> bool:
+        visible = raw.get("visible_electronics")
+        comps = self._norm_list(raw.get("components"))
+        board = str(raw.get("board") or "unknown").lower()
         try:
-            raw = self.cosmos.reason_image(jpeg_b64, extra=extra)
+            confidence = float(raw.get("confidence") or 0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        if visible is False:
+            return False
+        if visible is True and confidence >= 0.45 and (comps or board in {"nano", "uno"}):
+            return True
+        # Fallback if model omits the flag: need board + at least one part
+        if board in {"nano", "uno"} and comps:
+            return confidence >= 0.4 or confidence == 0.0 and len(comps) >= 2
+        if "breadboard" in comps and any(c in comps for c in ("led", "resistor", "jumper", "arduino", "nano", "uno")):
+            return True
+        return False
+
+    def _support_from_structure(self, raw: dict) -> dict[str, bool]:
+        comps = self._norm_list(raw.get("components"))
+        pins = self._norm_list(raw.get("pins_used"))
+        wires = raw.get("wires") if isinstance(raw.get("wires"), list) else []
+        wire_blob = " ".join(
+            f"{w.get('color', '')} {w.get('from', '')} {w.get('to', '')}"
+            for w in wires
+            if isinstance(w, dict)
+        ).lower()
+        blob = " ".join(comps + pins) + " " + wire_blob
+        support = {step["id"]: False for step in rules.STEPS}
+        for sid, needles in STEP_EVIDENCE.items():
+            support[sid] = any(n in blob for n in needles)
+        # signal needs a pin or a wire endpoint that looks like D13 / pin 13
+        if not support["signal"]:
+            support["signal"] = any(
+                p.replace(" ", "") in {"d13", "pin13", "13"} or p.endswith("13") for p in pins
+            )
+        return support
+
+    def analyze_frame(self, jpeg_b64: str) -> dict:
+        # Vision call: image only — no VAST text (that caused fake Arduino detections)
+        try:
+            raw = self.cosmos.reason_image(jpeg_b64)
         except cosmos.CosmosError as exc:
             raise vss.VssError(str(exc), getattr(exc, "status", 502)) from exc
 
         summary = str(raw.get("summary") or "").strip()
         advice = str(raw.get("placement_advice") or "").strip()
-        caption = summary
-        if advice:
-            caption = f"{summary} Advice: {advice}".strip()
-
+        reliable = self._frame_is_reliable(raw)
         now = time.time() - self.started
+
         with self._lock:
-            support = rules.support_map(caption)
-            # also mark from structured fields
-            comps = " ".join(str(x) for x in (raw.get("components") or []))
-            pins = " ".join(str(x) for x in (raw.get("pins_used") or []))
-            blob = f"{caption} {comps} {pins}"
-            support = {
-                key: support[key] or rules.mentions(blob, rules.SUPPORT[key]) for key in support
-            }
+            self.frames_seen += 1
+            alerts: list[dict] = []
+
+            if not reliable:
+                # reset streaks — empty desk must not keep progress cooking
+                for sid in self.streak:
+                    if not self.done[sid]:
+                        self.streak[sid] = 0
+                self.last_caption = summary or "No clear electronics in frame."
+                self.last_advice = ""
+                self.last_raw = raw
+                return {
+                    "steps": self._steps(),
+                    "alerts": [],
+                    "caption": self.last_caption,
+                    "advice": "",
+                    "circuit": self._circuit(),
+                    "reliable": False,
+                    "raw": {
+                        "board": raw.get("board"),
+                        "components": raw.get("components") or [],
+                        "pins_used": raw.get("pins_used") or [],
+                        "risks": raw.get("risks") or [],
+                        "confidence": raw.get("confidence"),
+                        "visible_electronics": raw.get("visible_electronics"),
+                    },
+                }
+
+            self.frames_reliable += 1
+            support = self._support_from_structure(raw)
+            comps = " ".join(self._norm_list(raw.get("components")))
+            pins = " ".join(self._norm_list(raw.get("pins_used")))
+            blob = f"{summary} {comps} {pins}"
+
             alerts = rules.warnings_for(
                 blob,
                 now,
@@ -132,19 +219,19 @@ class LiveSession:
             )
             for risk in raw.get("risks") or []:
                 key = str(risk)
-                if key == "no_resistor_on_LED" and not self.resistor_seen:
+                if key == "no_resistor_on_LED" and support["led"] and not support["resistor"]:
                     alerts.append(
                         {
                             "severity": "warning",
-                            "text": "Cosmos sees an LED without a clear resistor. Add 220Ω before powering.",
+                            "text": "LED visible without a clear resistor. Add 220Ω before powering.",
                             "speak": True,
                         }
                     )
-                elif key == "wrong_pin":
+                elif key == "wrong_pin" and not self.done["signal"]:
                     alerts.append(
                         {
                             "severity": "warning",
-                            "text": "Pin look wrong for Blink — sketch expects D13.",
+                            "text": "Signal pin does not look like D13. Blink expects D13.",
                             "speak": True,
                         }
                     )
@@ -159,9 +246,10 @@ class LiveSession:
 
             if support["resistor"]:
                 self.resistor_seen = True
-            if rules.usb_is_connected(blob):
+            if rules.usb_is_connected(blob) or "usb" in self._norm_list(raw.get("components")):
                 self.usb_connected = True
 
+            # Only the current open step can accrue streak
             for step in rules.STEPS:
                 sid = step["id"]
                 if self.done[sid]:
@@ -170,13 +258,15 @@ class LiveSession:
                     self.streak[sid] = self.streak.get(sid, 0) + 1
                 else:
                     self.streak[sid] = 0
-            # sequential completion: mark next open step if supported
-            for step in rules.STEPS:
-                sid = step["id"]
-                if self.done[sid]:
-                    continue
-                if self.streak.get(sid, 0) >= 1:
+                if self.streak[sid] >= STREAK_NEEDED:
                     self.done[sid] = True
+                    alerts.append(
+                        {
+                            "severity": "info",
+                            "text": f"Verified step: {step['title']}",
+                            "speak": False,
+                        }
+                    )
                 break
 
             note = rules.merge_circuit(
@@ -185,20 +275,12 @@ class LiveSession:
             )
             note = dict(note)
             note["at_sec"] = now
-            if raw.get("wires"):
-                for wire in raw["wires"][:4]:
-                    if isinstance(wire, dict):
-                        line = f"{wire.get('color', '')} {wire.get('from', '')}->{wire.get('to', '')}".strip()
-                        if line and line not in note["connections"]:
-                            note["connections"].append(line)
             self.notes.append(note)
             self.last_caption = summary
-            self.last_advice = advice
+            self.last_advice = advice if reliable else ""
             self.last_raw = raw
-            self.last_support = support
 
-            # dedupe alerts by text
-            seen_text = set()
+            seen_text: set[str] = set()
             unique = []
             for alert in alerts:
                 text = alert.get("text") or ""
@@ -211,12 +293,17 @@ class LiveSession:
                 "steps": self._steps(),
                 "alerts": unique[:3],
                 "caption": summary,
-                "advice": advice,
+                "advice": self.last_advice,
                 "circuit": {"components": note["components"], "connections": note["connections"][:8]},
+                "reliable": True,
                 "raw": {
                     "board": raw.get("board"),
+                    "components": raw.get("components") or [],
                     "pins_used": raw.get("pins_used") or [],
                     "risks": raw.get("risks") or [],
+                    "confidence": raw.get("confidence"),
+                    "visible_electronics": raw.get("visible_electronics"),
+                    "streak": {k: self.streak[k] for k in self.streak},
                 },
             }
 
@@ -228,14 +315,20 @@ class LiveSession:
             circuit = self._circuit()
             examples = list(self.examples[:5])
             raw = dict(self.last_raw)
+            reliable = self._frame_is_reliable(raw) if raw else False
 
-        # Pull fresh similar moments from VAST for this question
+        if not reliable and not caption:
+            return {
+                "answer": "I have not seen a clear Arduino bench yet. Point Desk View at the breadboard and wait for a verified look.",
+                "seek_sec": None,
+                "evidence_summary": "no-reliable-frame",
+            }
+
         try:
             examples.extend(self.vss.search_captions(message[:120], "electronics-bench-nano", top_k=4))
             examples.extend(self.vss.search_captions(message[:120], "electronics-bench", top_k=4))
         except vss.VssError:
             pass
-        # de-dupe
         seen: set[str] = set()
         deduped: list[str] = []
         for text in examples:
@@ -246,18 +339,19 @@ class LiveSession:
             deduped.append(text)
         examples = deduped[:8]
 
-        phrased = _phrase(message, caption, advice, circuit, examples, raw)
+        phrased = _phrase(message, caption, advice, circuit, examples, raw, reliable)
         if not phrased:
-            # fallback without W&B
-            bits = []
-            if advice:
-                bits.append(advice)
-            if caption:
-                bits.append(f"I currently see: {caption}")
-            if not bits:
-                bits.append("Arm the camera and let me look once, then ask again.")
-            phrased = " ".join(bits)
-        return {"answer": phrased, "seek_sec": None, "evidence_summary": f"cosmos+live examples={len(examples)}"}
+            if advice and reliable:
+                phrased = advice
+            elif caption:
+                phrased = f"From the last verified look: {caption}"
+            else:
+                phrased = "Show the board clearly and ask again."
+        return {
+            "answer": phrased,
+            "seek_sec": None,
+            "evidence_summary": f"reliable={reliable} examples={len(examples)}",
+        }
 
 
 def _phrase(
@@ -267,11 +361,13 @@ def _phrase(
     circuit: dict,
     examples: list[str],
     raw: dict,
+    reliable: bool,
 ) -> str | None:
     key = os.environ.get("WANDB_API_KEY", "").strip()
     if not key:
         return None
     lines = [
+        f"Live vision reliable: {reliable}",
         f"Live board summary: {caption or 'none yet'}",
         f"Placement advice from vision: {advice or 'none'}",
         f"Structured: {json.dumps(raw)[:700]}",
@@ -279,21 +375,20 @@ def _phrase(
         "Connections: " + ("; ".join((circuit.get("connections") or [])[:4]) or "none"),
     ]
     if examples:
-        lines.append("Indexed Arduino examples from VAST (treat as prior demos, not this camera):")
+        lines.append("Indexed Arduino examples from VAST (prior demos only, not this camera):")
         for ex in examples[:5]:
             lines.append(f"- {ex}")
     payload = {
         "model": WAND_MODEL,
-        "temperature": 0.2,
-        "max_tokens": 160,
+        "temperature": 0.1,
+        "max_tokens": 140,
         "messages": [
             {
                 "role": "system",
                 "content": (
-                    "You are CURRENT, a fast Arduino bench partner. "
-                    "Give concrete placement guidance for LEDs, resistors, and jumper wires. "
-                    "Use the live vision summary first, then the VAST examples for style. "
-                    "One or two short sentences. No markdown."
+                    "You are CURRENT, an Arduino bench partner. "
+                    "Trust the live vision fields first. If reliable is false, say you cannot see the board yet. "
+                    "VAST examples are style only. One or two short sentences. No markdown."
                 ),
             },
             {"role": "user", "content": "Question: " + message.strip() + "\n\n" + "\n".join(lines)},
