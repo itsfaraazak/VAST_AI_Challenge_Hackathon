@@ -177,6 +177,12 @@ addEventListener("resize", () => lastYolo && drawYolo(lastYolo));
 /* ---------- backend message router (also used by replay) ---------- */
 function onBackend(msg) {
   if (!msg) return;
+  // Demo teleop hold: for a few seconds after a teleop key, real coach/guidance updates must not overwrite the staged state.
+  const hold = window.__teleopHold;
+  if (hold && Date.now() < hold && !msg.__teleop) {
+    if (msg.type === "guidance" || msg.type === "coach") return;
+    if (msg.coach) msg = { ...msg, coach: undefined };
+  }
   if (msg.type === "trace") { routeTrace(msg); return; }
   if (msg.coach) applyCoach(msg.coach);
   if (msg.type === "coach") applyCoach(msg);
