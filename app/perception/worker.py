@@ -12,6 +12,8 @@ from coach import on_twin_update, public_coach_state
 from config import settings
 from perception import cosmos, yolo
 from session import Session
+from trace import emit, span
+from audio import canary as _canary
 
 log = logging.getLogger("worker")
 
@@ -19,6 +21,8 @@ USE_VERIFIER = os.environ.get("USE_VERIFIER", "0").strip() in ("1", "true", "yes
 
 
 async def run_worker(sess: Session, http: aiohttp.ClientSession) -> None:
+    _canary.TRACE_SESSION = sess  # lets ASR emit trace spans (main.py doesn't pass sess)
+    last_frame_trace = 0.0
     while True:
         await asyncio.sleep(0.15)
         if sess.latest_frame is None:
@@ -30,7 +34,18 @@ async def run_worker(sess: Session, http: aiohttp.ClientSession) -> None:
         seq = sess.frame_seq
         force = bool(getattr(sess, "force_cosmos", False))
 
-        y = await yolo.infer_frame(http, frame)
+        now_t = time.time()
+        if now_t - last_frame_trace >= 1.0:
+            last_frame_trace = now_t
+            await emit(sess, "frame", label="frame in", model="phone camera", sponsor="local",
+                       detail=f"seq {seq} - {len(frame) // 1024} KB JPEG")
+
+        async with span(sess, "yolo", label="YOLO11 detect", model="YOLO11", sponsor="nvidia") as sp:
+            y = await yolo.infer_frame(http, frame)
+            sp["detail"] = (", ".join((y.get("labels") or [])[:6]) or "no COCO objects") + (
+                f" ({y.get('error')})" if y.get("error") else "")
+            if not y.get("ok"):
+                sp["status"] = "error"
         sess.last_yolo = y
 
         # Always push YOLO overlay so the UI can show boxes even when we skip Cosmos
@@ -53,6 +68,10 @@ async def run_worker(sess: Session, http: aiohttp.ClientSession) -> None:
 
         gate = y.get("gate") or {}
         allow = bool(force or gate.get("allow_cosmos"))
+        await emit(sess, "gate", label="relevance gate", model="scene gate", sponsor="local",
+                   status="ok" if allow else "skip",
+                   detail=(("forced; " if force else "") + f"{gate.get('reason')}: {gate.get('detail') or ''}")
+                   if allow else f"skipped: {gate.get('reason')} - {gate.get('detail') or ''}")
         if not allow:
             sess.last_yolo_sig = y["signature"]
             # Throttle skip notices
@@ -88,7 +107,15 @@ async def run_worker(sess: Session, http: aiohttp.ClientSession) -> None:
                 "called_cosmos": True,
             })
 
-            twin, meta = await cosmos.extract_twin(http, frame)
+            async with span(sess, "cosmos", label="Cosmos3-Reason twin", model="Cosmos3-Reason",
+                            sponsor="nvidia") as sp:
+                twin, meta = await cosmos.extract_twin(http, frame)
+                if twin:
+                    sp["detail"] = (f"scene={twin.get('scene')}, {len(twin.get('components') or [])} parts, "
+                                    f"{len(twin.get('nets') or [])} nets, retries={meta.get('retries')}")
+                else:
+                    sp["status"] = "error"
+                    sp["detail"] = f"failed: {meta.get('error')}"
             if meta.get("ms"):
                 p95 = cosmos.record_latency(sess.cosmos_latencies, meta["ms"])
                 if p95 is not None and p95 > settings.cosmos_p95_degraded_s:
@@ -169,7 +196,10 @@ async def run_worker(sess: Session, http: aiohttp.ClientSession) -> None:
             if USE_VERIFIER:
                 from verifier.engine import verify_twin
                 t0 = time.perf_counter()
-                result = verify_twin(twin, supply_voltage=settings.supply_voltage)
+                async with span(sess, "verify", label="verifier", model="deterministic verifier",
+                                sponsor="local") as sp:
+                    result = verify_twin(twin, supply_voltage=settings.supply_voltage)
+                    sp["detail"] = f"{len(result['findings'])} findings, badge={result['badge']}"
                 timing["verify_ms"] = round((time.perf_counter() - t0) * 1000, 1)
                 findings = result["findings"]
                 verification = {"badge": result["badge"], "z3": result.get("z3")}
@@ -178,6 +208,8 @@ async def run_worker(sess: Session, http: aiohttp.ClientSession) -> None:
             else:
                 sess.findings = []
                 sess.verification = None
+                await emit(sess, "verify", label="verifier", model="deterministic verifier",
+                           sponsor="local", status="skip", detail="verifier disabled (USE_VERIFIER=0)")
 
             sess.timings.append(timing)
             del sess.timings[:-40]
