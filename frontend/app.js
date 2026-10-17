@@ -42,25 +42,41 @@ const cameraSelect = document.getElementById("cameraSelect");
 const cameraSelectLive = document.getElementById("cameraSelectLive");
 const liveBar = document.getElementById("liveBar");
 
-let activeStep = 0;
 let mediaStream = null;
 let videoDevices = [];
 let preferredDeviceId = "";
+let frameBusy = false;
+let chatBusy = false;
+let frameTimer = null;
+let lastAdvice = "";
+const canvas = document.createElement("canvas");
 
-function renderSteps() {
-  stepTotal.textContent = String(STEPS.length);
-  stepProgress.textContent = String(Math.min(activeStep + 1, STEPS.length));
-  stepList.innerHTML = STEPS.map((step, i) => {
-    const state =
-      i < activeStep ? "is-done" : i === activeStep ? "is-active" : "";
-    return `
+function renderSteps(steps) {
+  const rows =
+    steps && steps.length
+      ? steps
+      : STEPS.map((step, i) => ({
+          ...step,
+          state: i === 0 ? "active" : "pending",
+        }));
+  const active = rows.findIndex((step) => step.state === "active");
+  stepTotal.textContent = String(rows.length);
+  stepProgress.textContent = String(active >= 0 ? active + 1 : rows.length);
+  stepList.innerHTML = rows
+    .map((step) => {
+      const meta = STEPS.find((item) => item.id === step.id);
+      const state =
+        step.state === "done" ? "is-done" : step.state === "active" ? "is-active" : "";
+      const index = STEPS.findIndex((item) => item.id === step.id);
+      return `
       <li class="step ${state}" data-id="${step.id}">
-        <span class="step__index">${String(i + 1).padStart(2, "0")}</span>
-        <p class="step__title">${step.title}</p>
-        <p class="step__hint">${step.hint}</p>
+        <span class="step__index">${String((index >= 0 ? index : 0) + 1).padStart(2, "0")}</span>
+        <p class="step__title">${escapeHtml(step.title)}</p>
+        <p class="step__hint">${escapeHtml(meta ? meta.hint : "")}</p>
       </li>
     `;
-  }).join("");
+    })
+    .join("");
 }
 
 function addMessage(role, text) {
@@ -68,62 +84,52 @@ function addMessage(role, text) {
     role === "agent" ? "Current" : role === "system" ? "Alert" : "You";
   const el = document.createElement("article");
   el.className = `msg msg--${role}`;
-  el.innerHTML = `
-    <div class="msg__who">${who}</div>
-    <p class="msg__body">${text}</p>
-  `;
+  const whoEl = document.createElement("div");
+  whoEl.className = "msg__who";
+  whoEl.textContent = who;
+  const body = document.createElement("p");
+  body.className = "msg__body";
+  body.innerHTML = String(text);
+  el.append(whoEl, body);
   thread.appendChild(el);
   thread.scrollTop = thread.scrollHeight;
 }
 
-function agentReply(userText) {
-  const lower = userText.toLowerCase();
-  const step = STEPS[activeStep];
-
-  if (/next|done|finished|complete|tick/.test(lower) && activeStep < STEPS.length) {
-    activeStep = Math.min(activeStep + 1, STEPS.length);
-    renderSteps();
-    if (activeStep >= STEPS.length) {
-      return "Sequence complete. Blink should be breathing. Ask me what you changed if it dies later.";
-    }
-    return `Locked step ${activeStep}. Next up: <strong>${STEPS[activeStep].title}</strong>.`;
-  }
-
-  if (/resistor|fry|burn|short/.test(lower)) {
-    return "If that LED has no resistor on the way to 5V, stop. Unplug USB, then finish step 02.";
-  }
-
-  if (/pin|wrong|d13|13|12|8|9/.test(lower)) {
-    return `Your sketch is almost certainly driving <strong>D13</strong>. If the wire landed on another header, that is why the LED ignores you. Re-check step 03 against the code.`;
-  }
-
-  if (/what.*(change|differ|move)|earlier|before|memory/.test(lower)) {
-    return "I keep a timeline of every stable board state. Once the pipeline is wired in, I will replay the clip where the red jumper moved.";
-  }
-
-  if (/why|not work|broken|help/.test(lower)) {
-    return `On <strong>${step.title}</strong>: ${step.hint} Show me a closer angle of the header if the pins look ambiguous.`;
-  }
-
-  return `Still on step ${String(activeStep + 1).padStart(2, "0")} — ${step.title}. Say “next” when that connection is solid, or tell me what looks wrong.`;
+function speak(text) {
+  if (!window.speechSynthesis || !text) return;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 1.05;
+  window.speechSynthesis.speak(utterance);
 }
 
-form.addEventListener("submit", (e) => {
-  e.preventDefault();
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
   const text = input.value.trim();
-  if (!text) return;
+  if (!text || chatBusy) return;
   addMessage("user", escapeHtml(text));
   input.value = "";
   autoGrow();
-  window.setTimeout(() => {
-    addMessage("agent", agentReply(text));
-  }, 280);
+  chatBusy = true;
+  try {
+    const response = await fetch("api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || "chat failed");
+    addMessage("agent", escapeHtml(data.answer || ""));
+  } catch {
+    addMessage("system", "Chat did not come back. Is the backend running?");
+  } finally {
+    chatBusy = false;
+  }
 });
 
 input.addEventListener("input", autoGrow);
-input.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
+input.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
     form.requestSubmit();
   }
 });
@@ -134,14 +140,14 @@ function autoGrow() {
 }
 
 function escapeHtml(str) {
-  return str
+  return String(str)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 }
 
-/* Voice — hold to talk via Web Speech API when available */
+/* Voice */
 const SpeechRecognition =
   window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
@@ -193,12 +199,12 @@ if (SpeechRecognition) {
   voiceBtn.addEventListener("mousedown", startListen);
   voiceBtn.addEventListener("mouseup", stopListen);
   voiceBtn.addEventListener("mouseleave", stopListen);
-  voiceBtn.addEventListener("touchstart", (e) => {
-    e.preventDefault();
+  voiceBtn.addEventListener("touchstart", (event) => {
+    event.preventDefault();
     startListen();
   });
-  voiceBtn.addEventListener("touchend", (e) => {
-    e.preventDefault();
+  voiceBtn.addEventListener("touchend", (event) => {
+    event.preventDefault();
     stopListen();
   });
 } else {
@@ -211,7 +217,7 @@ if (SpeechRecognition) {
   });
 }
 
-/* Camera — Continuity Camera / Desk View / built-in */
+/* Camera */
 
 function deviceScore(label = "") {
   const l = label.toLowerCase();
@@ -260,6 +266,10 @@ function fillCameraSelects(selectedId) {
   cameraSelect.innerHTML = options;
   cameraSelect.disabled = false;
   cameraSelectLive.innerHTML = options;
+  if (selectedId) {
+    cameraSelect.value = selectedId;
+    cameraSelectLive.value = selectedId;
+  }
 }
 
 async function listCameras() {
@@ -275,9 +285,61 @@ async function listCameras() {
 }
 
 function stopStream() {
+  if (frameTimer) {
+    clearInterval(frameTimer);
+    frameTimer = null;
+  }
   if (!mediaStream) return;
   for (const track of mediaStream.getTracks()) track.stop();
   mediaStream = null;
+}
+
+function grabJpegB64() {
+  if (!video.videoWidth) return "";
+  const maxW = 640;
+  const scale = Math.min(1, maxW / video.videoWidth);
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+  return dataUrl.split(",", 2)[1] || "";
+}
+
+async function pushFrame() {
+  if (frameBusy || !mediaStream) return;
+  const image = grabJpegB64();
+  if (!image) return;
+  frameBusy = true;
+  try {
+    const response = await fetch("api/frame", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image_jpeg_b64: image }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || "frame failed");
+    renderSteps(data.steps);
+    for (const alert of data.alerts || []) {
+      addMessage("system", escapeHtml(alert.text || ""));
+      if (alert.speak) speak(alert.text || "");
+    }
+    if (data.advice && data.advice !== lastAdvice) {
+      lastAdvice = data.advice;
+      addMessage("agent", escapeHtml(data.advice));
+    }
+  } catch {
+    /* keep UI responsive if Cosmos is slow/down */
+  } finally {
+    frameBusy = false;
+  }
+}
+
+function startFrameLoop() {
+  if (frameTimer) clearInterval(frameTimer);
+  // first look quickly, then every 5s
+  setTimeout(() => pushFrame(), 800);
+  frameTimer = setInterval(() => pushFrame(), 5000);
 }
 
 async function startCamera(deviceId) {
@@ -286,13 +348,13 @@ async function startCamera(deviceId) {
     video: deviceId
       ? {
           deviceId: { exact: deviceId },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
         }
       : {
           facingMode: { ideal: "environment" },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
         },
   };
 
@@ -307,12 +369,12 @@ async function startCamera(deviceId) {
   const track = mediaStream.getVideoTracks()[0];
   const label = track?.label || "camera";
   feedSource.textContent = label;
-  preferredDeviceId = track?.getSettings?.().deviceId || deviceId || preferredDeviceId;
+  preferredDeviceId =
+    track?.getSettings?.().deviceId || deviceId || preferredDeviceId;
 
-  // Labels often only appear after permission — refresh list
   await listCameras();
   fillCameraSelects(preferredDeviceId);
-
+  startFrameLoop();
   return label;
 }
 
@@ -320,7 +382,6 @@ armCamera.addEventListener("click", async () => {
   armCamera.disabled = true;
   armCamera.textContent = "Arming…";
   try {
-    // Permission probe so Continuity / Desk View labels populate
     if (!videoDevices.some((d) => d.label)) {
       const probe = await navigator.mediaDevices.getUserMedia({
         video: true,
@@ -335,7 +396,7 @@ armCamera.addEventListener("click", async () => {
     const label = await startCamera(chosen);
     addMessage(
       "agent",
-      `Camera armed on <strong>${escapeHtml(label)}</strong>. Prefer Desk View for the breadboard. Build step 01 when you are ready.`
+      `Camera armed on <strong>${escapeHtml(label)}</strong>. Sending stills to Cosmos — Desk View is best for the breadboard.`
     );
   } catch (err) {
     const name = err?.name || "Error";
@@ -343,7 +404,7 @@ armCamera.addEventListener("click", async () => {
       "system",
       name === "NotAllowedError"
         ? "Camera permission blocked. Allow it in the browser, then arm again."
-        : "Could not open that camera. On a Mac, enable Continuity Camera / Desk View in Control Centre, then pick it from the list."
+        : "Could not open that camera. Enable Continuity / Desk View, then pick it from the list."
     );
   } finally {
     armCamera.disabled = false;
@@ -365,7 +426,9 @@ async function onCameraChange(selectEl) {
 cameraSelect.addEventListener("change", () => {
   preferredDeviceId = cameraSelect.value;
 });
-cameraSelectLive.addEventListener("change", () => onCameraChange(cameraSelectLive));
+cameraSelectLive.addEventListener("change", () =>
+  onCameraChange(cameraSelectLive)
+);
 
 if (navigator.mediaDevices?.addEventListener) {
   navigator.mediaDevices.addEventListener("devicechange", () => {
@@ -382,21 +445,18 @@ function tickClock() {
   feedClock.textContent = now.toLocaleTimeString("en-GB", { hour12: false });
 }
 
-/* Demo: click a done step to jump (handy while wiring UI) */
-stepList.addEventListener("click", (e) => {
-  const li = e.target.closest(".step");
-  if (!li) return;
-  const idx = [...stepList.children].indexOf(li);
-  if (idx < 0) return;
-  activeStep = idx;
-  renderSteps();
-});
-
 renderSteps();
 tickClock();
 setInterval(tickClock, 1000);
 
+fetch("api/session")
+  .then((response) => (response.ok ? response.json() : null))
+  .then((data) => {
+    if (data?.steps) renderSteps(data.steps);
+  })
+  .catch(() => {});
+
 addMessage(
   "agent",
-  "I am watching the bench for <strong>Blink</strong>. Arm the camera, then work the sequence on the right. I will interrupt if you skip the resistor."
+  "Live mode: your camera is the source. Cosmos watches stills; VAST Arduino clips only teach better placement tips. Arm the camera to start."
 );

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CURRENT — bench partner</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@600;700;800&family=Work+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script>
+      if (location.pathname === "/app") location.replace("/app/" + location.search + location.hash);
+    </script>
+  </head>
+  <body>
+    <div class="app">
+      <header class="top">
+        <div class="brand">
+          <span class="brand__mark" aria-hidden="true"></span>
+          <h1 class="brand__name">CURRENT</h1>
+        </div>
+        <p class="top__project">
+          Building <em>Blink</em>
+          <span class="top__sep" aria-hidden="true">·</span>
+          Arduino Nano on breadboard
+        </p>
+        <div class="top__status" role="status">
+          <span class="top__dot" aria-hidden="true"></span>
+          Watching
+        </div>
+      </header>
+
+      <main class="stage">
+        <section class="feed" aria-label="Bench camera">
+          <div class="feed__frame">
+            <video
+              id="benchVideo"
+              class="feed__video"
+              playsinline
+              controls
+            ></video>
+            <div class="feed__idle" id="feedIdle">
+              <p class="feed__idle-kicker">Bench clip</p>
+              <p class="feed__idle-copy">
+                Indexed Arduino bench footage. CURRENT reads each segment as it plays.
+              </p>
+              <div class="feed__arm-row">
+                <label class="sr-only" for="cameraSelect">Clip</label>
+                <select id="cameraSelect" class="feed__select" disabled>
+                  <option value="">Loading clips…</option>
+                </select>
+                <button type="button" class="feed__arm" id="armCamera">
+                  Play clip
+                </button>
+              </div>
+            </div>
+            <div class="feed__live-bar" id="liveBar" hidden>
+              <label class="sr-only" for="cameraSelectLive">Clip</label>
+              <select id="cameraSelectLive" class="feed__select feed__select--live"></select>
+            </div>
+            <div class="feed__chrome">
+              <span id="feedClock">00:00:00</span>
+              <span id="feedSource">no feed</span>
+            </div>
+          </div>
+        </section>
+
+        <aside class="rail" aria-label="Build steps">
+          <header class="rail__head">
+            <h2>Sequence</h2>
+            <p><span id="stepProgress">1</span> / <span id="stepTotal">5</span></p>
+          </header>
+          <ol class="steps" id="stepList"></ol>
+        </aside>
+      </main>
+
+      <section class="dock" aria-label="Assistant">
+        <div class="dock__thread" id="chatThread" aria-live="polite"></div>
+        <form class="dock__compose" id="chatForm">
+          <label class="sr-only" for="chatInput">Message</label>
+          <textarea
+            id="chatInput"
+            name="message"
+            rows="1"
+            placeholder="Ask why it isn’t blinking, or what changed…"
+            autocomplete="off"
+          ></textarea>
+          <button
+            type="button"
+            class="dock__mic"
+            id="voiceBtn"
+            aria-label="Hold to talk"
+            title="Hold to talk"
+          >
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"
+              />
+            </svg>
+          </button>
+          <button type="submit" class="dock__send" aria-label="Send">
+            Send
+          </button>
+        </form>
+      </section>
+    </div>
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>
