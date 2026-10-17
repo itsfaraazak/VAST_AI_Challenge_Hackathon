@@ -548,7 +548,7 @@ function attach() {
   if (getComputedStyle(host).position === "static") host.style.position = "relative";
   const cv = R.renderer.domElement; cv.style.cssText = "display:block;width:100%;height:100%;outline:none";
   if (cv.parentNode !== host) host.appendChild(cv);
-  if (!R.hud) { R.hud = document.createElement("div"); R.hud.style.cssText = "position:absolute;left:10px;top:8px;font:11px/1.5 ui-monospace,Menlo,monospace;letter-spacing:.08em;pointer-events:none;text-shadow:0 0 8px #000;z-index:2"; }
+  if (!R.hud) { R.hud = document.createElement("div"); R.hud.style.cssText = "position:absolute;left:12px;top:34px;font:11px/1.5 ui-monospace,Menlo,monospace;letter-spacing:.08em;pointer-events:none;text-shadow:0 0 8px #000;z-index:2"; }
   if (R.hud.parentNode !== host) host.appendChild(R.hud);
   if (R.ro) R.ro.disconnect();
   const size = () => {
