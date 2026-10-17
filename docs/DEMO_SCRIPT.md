@@ -8,7 +8,7 @@ Round 1 = 2 min at the table. Top 5 = 3 min on stage. Demos beat slides: the jud
 ## Pitch points (map to criteria)
 - **Idea:** Not a chatbot you ask. Always-on and proactive: it teaches step by step, interrupts on mistakes, and asks "Ready for the next step? Say next" instead of racing ahead. Every spoken warning is gated by a deterministic verifier (11 named mistake detectors in `app/mistakes.py`); the LLM only phrases verified facts.
 - **Technical:** Camera -> YOLO11 gate (~75 ms) -> Cosmos3-Reason (2.7-4.5 s) -> verifier -> W&B Llama coach. Voice: Canary ASR ~0.3 s, coach reply ~0.6 s. The coach speaks a mistake only after two consecutive agreeing analyses, so there are no flickery false alarms.
-- **Design:** 3D digital twin mirrors the real parts live, animates the fix (arrow moving the wire), spin toolbar. Right-hand "Behind the scenes" trace shows every sponsor call with its latency. Hidden step menu lets a human override the AI.
+- **Design:** 3D digital twin mirrors the real parts live, animates the fix (arrow moving the wire), spin toolbar. Right-hand "Trace" trace shows every sponsor call with its latency. Hidden step menu lets a human override the AI.
 - **Impact (sponsor tools, 7 visible):** NVIDIA Cosmos3-Reason, YOLO11, Canary-1B, Cosmos-Embed1 (all on CoreWeave GPUs), W&B Inference, VAST S3 (+ VSS search). Projects and twin state persist in VAST, so it resumes: "Welcome back, we were on step 4... you had the LED backwards last time."
 - **Presentation:** The judge is the demo. They sabotage a real board.
 
