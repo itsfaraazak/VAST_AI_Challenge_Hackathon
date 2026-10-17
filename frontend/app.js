@@ -369,19 +369,53 @@ async function connect() {
 }
 
 /* ---------- camera ---------- */
-$("armCamera").onclick = async () => {
+let camDeviceId = localStorage.getItem("camDeviceId") || "";
+function camMsg(t, bad) { const p = $("feedIdle").querySelector("p"); p.textContent = t; p.style.color = bad ? "#ff8a8a" : ""; }
+async function openStream() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw Object.assign(new Error(isSecureContext ? "This browser has no camera API." : "Camera needs HTTPS. Open the https:// workshop URL or http://localhost."), { name: "NoCameraApi" });
+  }
+  const tries = [];
+  if (camDeviceId) tries.push({ video: { deviceId: { exact: camDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+  tries.push({ video: { facingMode: PHONE ? "environment" : "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+  tries.push({ video: true, audio: false });
+  let err;
+  for (const c of tries) { try { return await navigator.mediaDevices.getUserMedia(c); } catch (e) { err = e; if (e.name === "NotAllowedError") break; } }
+  throw err;
+}
+async function fillCams() {
+  const sel = $("camSel"); if (!sel || !navigator.mediaDevices?.enumerateDevices) return;
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+  const rank = (d) => (/desk view/i.test(d.label) ? 0 : /continuity|iphone|ipad/i.test(d.label) ? 1 : 2);
+  devs.sort((x, y) => rank(x) - rank(y));
+  sel.innerHTML = devs.map((d, i) => `<option value="${esc(d.deviceId)}">${esc(d.label || "Camera " + (i + 1))}</option>`).join("");
+  if (camDeviceId && devs.some((d) => d.deviceId === camDeviceId)) sel.value = camDeviceId;
+  sel.style.display = devs.length > 1 ? "" : "none";
+}
+async function armCamera() {
+  camMsg("Starting camera…");
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: PHONE ? "environment" : "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-    video.srcObject = stream; await video.play();
+    const old = video.srcObject; if (old) old.getTracks().forEach((t) => t.stop());
+    const stream = await openStream(); console.log("cam: stream ok");
+    video.srcObject = stream; await Promise.race([video.play(), new Promise((r) => setTimeout(r, 2500))]); console.log("cam: playing", video.videoWidth);
     video.classList.add("is-live"); $("feedIdle").classList.add("is-hidden");
-    if (!PHONE && !DEMO) { // laptop cam: frames must come from a phone-role socket
+    if (!PHONE && !DEMO && (!camWs || camWs.readyState > 1)) { // laptop cam: frames must come from a phone-role socket
       const proto = location.protocol === "https:" ? "wss" : "ws";
       camWs = new WebSocket(`${proto}://${location.host}${BASE}/ws?code=${sessionCode}&role=phone`);
     }
-    startRecording(stream);
-    frameLoop();
-  } catch (e) { setLive("camera denied", false); }
-};
+    frameLoop();                                   // frames first: nothing below may stop detection
+    try { startRecording(stream); } catch {}
+    fillCams().catch(() => {});
+    setLive("watching");
+  } catch (e) {
+    $("feedIdle").classList.remove("is-hidden");
+    const why = { NotAllowedError: "Camera permission blocked. Click the camera icon in the address bar, allow it, then retry.", NotFoundError: "No camera found. Plug one in or pick another device.", NotReadableError: "The camera is busy in another app or tab. Close it and retry.", NoCameraApi: e.message }[e.name] || `Camera error: ${e.name || ""} ${e.message || ""}`;
+    camMsg(why, true); setLive("camera error", false); console.error("camera", e);
+  }
+}
+$("armCamera").onclick = armCamera;
+$("camSel")?.addEventListener("change", (e) => { camDeviceId = e.target.value; localStorage.setItem("camDeviceId", camDeviceId); armCamera(); });
+if (Q.get("autoarm") === "1") setTimeout(armCamera, 600);
 if (PHONE && !DEMO) { $("feedIdle").querySelector("p").textContent = "Tap to start the camera"; }
 let looping = false;
 function frameLoop() {
