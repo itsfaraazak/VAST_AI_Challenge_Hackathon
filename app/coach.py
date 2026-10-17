@@ -100,6 +100,8 @@ def _touch(sess, step_changed: bool = False) -> None:
     c = sess.coach
     c["last_act_ts"] = now
     if step_changed:
+        c["awaiting_next"] = False
+        c["ready_votes"] = {"ver": None, "n": 0, "idx": c.get("step_index", 0)}
         c["step_ts"] = now
         c["hint_level"] = 0
         c["last_hint_ts"] = 0.0
@@ -188,6 +190,7 @@ def public_coach_state(sess) -> dict:
         "projects": list_projects(),
         "board": c.get("board", "nano"),
         "mistakes": public_mistakes(_diag(sess)),
+        "awaiting_next": bool(sess.coach.get("awaiting_next")),
         "confidence": _confidence(sess),
     }
 
@@ -202,7 +205,38 @@ def _diag(sess) -> list[dict]:
     ms = diagnose(getattr(sess, "twin", None), getattr(sess, "findings", None), step)
     if project and project.get("id") != "blink":  # Blink-specific rules do not apply: generic checks only
         ms = [m for m in ms if m["id"] in _GENERIC_MISTAKES]
-    return ms
+    dismissed = set(c.get("dismissed") or [])
+    return [m for m in ms if m["id"] not in dismissed]
+
+
+async def override(sess, http, action: str, index: int | None = None) -> dict | None:
+    """Manual override: the user knows better than the vision model. Quiet, undoable by restarting the step."""
+    ensure_session_coach(sess)
+    c = sess.coach
+    idx = c.get("step_index", 0) if index is None else int(index)
+    if action in ("complete", "skip"):
+        set_step(sess, idx)
+        st = advance_step(sess, 1)
+        tip = await teach_current_step(sess, http, force=True)
+        lead = "Marked as done." if action == "complete" else "Skipped."
+        return _msg(sess, f"{lead} {(tip or {}).get('text', '')}".strip(), ["override_" + action], "curriculum")
+    if action == "dismiss":
+        ids = [m["id"] for m in _diag(sess)]
+        c["dismissed"] = sorted(set(c.get("dismissed") or []) | set(ids))
+        c["mistake_votes"] = {"ver": None, "seen": {}}
+        _touch(sess)
+        return _msg(sess, "Understood, I will stop flagging that. Tell me if I get it wrong again.", ["override_dismiss"], "curriculum")
+    if action == "recheck":
+        sess.force_cosmos = True
+        c["mistake_votes"] = {"ver": None, "seen": {}}
+        c["ready_votes"] = {"ver": None, "n": 0, "idx": idx}
+        return _msg(sess, "Taking another careful look at the board.", ["override_recheck"], "curriculum")
+    if action == "restart":
+        set_step(sess, idx)
+        c["dismissed"] = []
+        tip = await teach_current_step(sess, http, force=True)
+        return tip
+    return None
 
 
 def start_project(sess, project_id: str = "blink", board: str | None = None, project: dict | None = None) -> dict:
@@ -481,7 +515,8 @@ async def converse(sess, http: aiohttp.ClientSession, question: str) -> dict:
             "coach": public_coach_state(sess),
         }
 
-    if any(w in low for w in ("next", "done", "finished", "continue", "got it", "ready")):
+    yes = sess.coach.get("awaiting_next") and low.strip(" .!") in ("yes", "yeah", "yep", "sure", "ok", "okay", "go", "go on", "yes please")
+    if yes or any(w in low for w in ("next", "done", "finished", "continue", "got it", "ready")):
         st = advance_step(sess, 1)
         tip = await teach_current_step(sess, http, force=True)
         text = tip["text"] if tip else f"On to step {st['step_index'] + 1}."
@@ -678,14 +713,27 @@ async def on_twin_update(sess, http: aiohttp.ClientSession) -> dict | None:
         return await teach_current_step(sess, http, force=False)
     suggested = infer_step_from_twin(project, sess.twin)
     idx = sess.coach["step_index"]
-    if suggested > idx and suggested <= idx + 1:
-        done = step_at(project, idx)
-        sess.coach["step_index"] = suggested
-        sess.coach["last_tip_key"] = None
-        _touch(sess, True)
-        cel = _celebrate(sess, done)
-        tip = await teach_current_step(sess, http, force=False)
-        if tip:
-            cel["text"] = cel["text"] + " Next: " + tip["text"]
-        return cel
+    if suggested > idx and not sess.coach.get("awaiting_next"):
+        # Looks done. Two consecutive twins must agree, then ASK before moving on (never auto-advance on one noisy frame).
+        ver = getattr(sess, "last_cosmos_ts", 0)
+        rv = sess.coach.setdefault("ready_votes", {"ver": None, "n": 0, "idx": idx})
+        if rv["idx"] != idx:
+            rv.update(ver=None, n=0, idx=idx)
+        if rv["ver"] != ver:
+            rv["ver"] = ver
+            rv["n"] += 1
+        if rv["n"] >= 2:
+            done = step_at(project, idx)
+            sess.coach["awaiting_next"] = True
+            _touch(sess)
+            cel = _celebrate(sess, done)
+            cel["text"] = (cel["text"].split(" " + (done.get("check") or "\0"))[0]
+                           + ' Ready for the next step? Say "next" or tap Continue.')
+            sess.coach["pending_check"] = None  # confirmation, not a quiz, is what we wait for
+            cel["step_ready"] = True
+            cel["coach"] = public_coach_state(sess)
+            return cel
+        return None
+    if sess.coach.get("awaiting_next"):
+        return None  # waiting for the user to confirm; don't talk over them
     return await teach_current_step(sess, http, force=False)
