@@ -22,31 +22,73 @@ FIRST classify the scene:
 If scene="other", return ONLY:
 {"scene":"other","observation":"<one sentence of what you actually see>","components":[],"nets":[],"placements":[],"wiring_check":{"ok":false,"issues":["not a breadboard scene"]}}
 
-If scene="bench", return ONLY JSON:
-{
-  "scene":"bench",
-  "observation":"<2 sentences: what is already placed, what looks wrong>",
-  "components":[{"id":"nano1","type":"arduino","value":"nano"},{"id":"r1","type":"resistor","value":"220"},{"id":"d1","type":"led","value":"red"}],
-  "nets":[["nano1.d13","r1.a"],["r1.b","d1.a"],["d1.k","nano1.gnd"]],
-  "placements":[
-    {"id":"d1","part":"led","anode_hole":"E12","cathode_hole":"E13","ok":true,"note":"long leg toward resistor"},
-    {"id":"r1","part":"resistor","holes":["A12","D13"],"ok":true,"note":"series from D13 row to LED anode row"}
-  ],
-  "wiring_check":{
-    "target":"blink_nano_external_led",
-    "expected":"D13 -> 220ohm -> LED anode; LED cathode -> GND",
-    "ok":false,
-    "issues":["cathode not yet on GND"]
-  },
-  "supply_voltage":5
-}
+If scene="bench", return ONLY this compact JSON (double quotes, no markdown, no extra keys):
+{"scene":"bench",
+ "observation":"<max 2 short sentences: what is on the board and what looks wrong>",
+ "components":[{"id":"nano1","type":"arduino","value":"nano"},{"id":"r1","type":"resistor","value":"220"},{"id":"d1","type":"led","value":"red"},{"id":"w1","type":"wire","value":"black"}],
+ "nets":[["<partid>.<pin>","<partid>.<pin>"]],
+ "led_lit":false,
+ "issues":["<max 12 words each, [] if none>"]}
 
 Rules:
-- Breadboard holes: letter column A–J + row number (e.g. E15). Be honest if unsure — set ok=false and say so in note.
-- Types allowed: resistor, led, battery, supply, switch, wire, capacitor, diode, arduino, breadboard, unknown.
-- LED anode pin suffix .a ; cathode .k
-- JSON only. No markdown.
+- components: list EVERY visible part: the board (arduino for Nano, esp32 for ESP32), each resistor, each LED (value = color), each jumper wire (value = color). Types: resistor, led, battery, supply, switch, wire, capacitor, diode, arduino, esp32, breadboard, unknown. Max 10 components.
+- nets: ONLY connections you can actually trace in the image. Pins look like nano1.d13, nano1.gnd, nano1.5v; LED anode (long leg) = d1.a, cathode (short leg) = d1.k; resistor ends r1.a / r1.b. If you cannot trace it, leave it out and mention it in issues. Never invent. The values above are only a FORMAT illustration.
+- led_lit = true only if the LED is visibly glowing.
+- issues: real problems you see (LED backwards, no resistor, resistor to 5V not D13, cathode not on GND, board not in breadboard, loose wire...). Never repeat a phrase. Stop when the JSON is closed.
 """
+
+
+def _from_raw(text: str) -> dict:
+    data = json.loads(_repair(text))
+    issues = data.get("issues")
+    if isinstance(issues, list) and not data.get("wiring_check"):
+        data["wiring_check"] = {"ok": not issues, "issues": [str(i)[:140] for i in issues][:6]}
+    twin = parse_twin(data)
+    if "led_lit" in data:
+        twin["led_lit"] = bool(data["led_lit"])
+    return twin
+
+
+def _repair(text: str) -> str:
+    """Salvage truncated / single-quoted JSON from a VLM that ran into max_tokens."""
+    t = (text or "").strip()
+    i = t.find("{")
+    if i < 0:
+        return t
+    t = t[i:]
+    try:
+        json.loads(t)
+        return t
+    except json.JSONDecodeError:
+        pass
+    # cut back to the last comma or closing bracket at depth>0, then close what is open
+    for cut in range(len(t), 0, -1):
+        if t[cut - 1] not in ",]}":
+            continue
+        cand = t[:cut].rstrip(",")
+        stack, in_str, esc = [], False, False
+        for ch in cand:
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            elif ch in "{[":
+                stack.append("}" if ch == "{" else "]")
+            elif ch in "}]" and stack:
+                stack.pop()
+        if in_str:
+            continue
+        try:
+            json.loads(cand + "".join(reversed(stack)))
+            return cand + "".join(reversed(stack))
+        except json.JSONDecodeError:
+            continue
+    return t
 
 
 async def _model_id(session: aiohttp.ClientSession) -> str:
@@ -70,7 +112,7 @@ async def extract_twin(session: aiohttp.ClientSession, jpeg: bytes) -> tuple[dic
     body = {
         "model": model,
         "temperature": 0,
-        "max_tokens": 768,
+        "max_tokens": 500,
         "messages": [{"role": "user", "content": content}],
     }
     text = None
@@ -97,7 +139,7 @@ async def extract_twin(session: aiohttp.ClientSession, jpeg: bytes) -> tuple[dic
             meta["error"] = "bad_response_shape"
             return None, meta
         try:
-            twin = parse_twin(text)
+            twin = _from_raw(text)
             meta["ok"] = True
             meta["retries"] = attempt
             meta["scene"] = twin.get("scene")
@@ -107,7 +149,7 @@ async def extract_twin(session: aiohttp.ClientSession, jpeg: bytes) -> tuple[dic
             body = {
                 "model": model,
                 "temperature": 0,
-                "max_tokens": 768,
+                "max_tokens": 500,
                 "messages": [
                     {"role": "user", "content": content},
                     {"role": "assistant", "content": text or ""},

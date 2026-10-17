@@ -7,7 +7,7 @@ from typing import Any
 
 ALLOWED_TYPES = {
     "resistor", "led", "battery", "supply", "switch", "wire",
-    "capacitor", "diode", "arduino", "raspberry-pi", "breadboard", "unknown",
+    "capacitor", "diode", "arduino", "esp32", "raspberry-pi", "breadboard", "unknown",
 }
 
 

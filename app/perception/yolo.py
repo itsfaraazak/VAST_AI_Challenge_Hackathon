@@ -140,49 +140,15 @@ def scene_gate(labels: list[str], boxes: list[dict], shape: list | None) -> dict
                 x1, y1, x2, y2 = b["xyxy"]
                 person_frac = max(person_frac, max(0.0, (x2 - x1) * (y2 - y1)) / area)
 
-    # Hard reject: person/animal fills a large part of the frame
-    if person_frac >= 0.28 or (personish and not hints and person_frac >= 0.12):
-        return {
-            "allow_cosmos": False,
-            "reason": "person_or_animal_in_frame",
-            "detail": f"YOLO sees {personish or labels}; point the camera at the breadboard.",
-            "person_frac": round(person_frac, 3),
-            "hints": hints,
-        }
-
-    # Empty COCO detections: could be a close-up breadboard (not in COCO) — allow Cosmos
-    if not labels:
-        return {
-            "allow_cosmos": True,
-            "reason": "no_coco_objects_possible_bench",
-            "detail": "No COCO objects; treating as possible close-up bench.",
-            "person_frac": round(person_frac, 3),
-            "hints": hints,
-        }
-
-    if hints and not personish:
-        return {
-            "allow_cosmos": True,
-            "reason": "desk_hints",
-            "detail": f"Desk-like cues: {hints}",
-            "person_frac": round(person_frac, 3),
-            "hints": hints,
-        }
-
-    if personish and hints and person_frac < 0.2:
-        return {
-            "allow_cosmos": True,
-            "reason": "mixed_desk_ok",
-            "detail": "Person small + desk objects present.",
-            "person_frac": round(person_frac, 3),
-            "hints": hints,
-        }
-
-    # Random COCO junk (e.g. 'cat' on a jacket) with no desk cues → skip
+    # YOLO is COCO: it has no breadboard class, and a hand holding the board reads as "person".
+    # So it never blocks Cosmos (which classifies bench vs other itself in ~1 s); it only annotates.
+    note = f"YOLO sees {sorted(low)}" if low else "no COCO objects (close-up bench likely)"
+    if personish:
+        note += "; person/hand present, Cosmos decides if a board is visible"
     return {
-        "allow_cosmos": False,
-        "reason": "irrelevant_coco",
-        "detail": f"YOLO classes {sorted(low)} are not a breadboard scene.",
+        "allow_cosmos": True,
+        "reason": "person_in_frame_ok" if personish else ("desk_hints" if hints else "yolo_informational"),
+        "detail": note,
         "person_frac": round(person_frac, 3),
         "hints": hints,
     }
