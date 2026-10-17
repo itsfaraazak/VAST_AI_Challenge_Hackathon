@@ -7,10 +7,12 @@ import aiohttp
 
 from config import settings
 from timing import timed
+from trace import emit
 
 log = logging.getLogger("canary")
 
 _MODEL: str | None = None
+TRACE_SESSION = None  # set by perception.worker; used for trace events
 
 
 async def resolve_model(http: aiohttp.ClientSession) -> str:
@@ -38,7 +40,24 @@ async def resolve_model(http: aiohttp.ClientSession) -> str:
     return _MODEL
 
 
-async def transcribe(http: aiohttp.ClientSession, wav: bytes) -> dict:
+async def transcribe(http: aiohttp.ClientSession, wav: bytes, sess=None) -> dict:
+    sess = sess or TRACE_SESSION
+    if sess is None:
+        return await _transcribe(http, wav)
+    sid = await emit(sess, "asr", label="Canary ASR", model="Canary-1B", sponsor="nvidia", status="start")
+    try:
+        r = await _transcribe(http, wav)
+    except Exception as e:  # noqa: BLE001
+        await emit(sess, "asr", label="Canary ASR", model="Canary-1B", sponsor="nvidia", status="error",
+                   detail=f"{type(e).__name__}: {e}", sid=sid)
+        raise
+    await emit(sess, "asr", label="Canary ASR", model="Canary-1B", sponsor="nvidia",
+               status="ok" if r.get("ok") else "error", ms=r.get("ms"),
+               detail=(r.get("text") or r.get("error") or f"http {r.get('http')}")[:120], sid=sid)
+    return r
+
+
+async def _transcribe(http: aiohttp.ClientSession, wav: bytes) -> dict:
     if not settings.gpu_token:
         return {"text": "", "ok": False, "error": "no_token"}
     model = await resolve_model(http)
