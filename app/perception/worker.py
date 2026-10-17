@@ -185,12 +185,11 @@ async def run_worker(sess: Session, http: aiohttp.ClientSession) -> None:
                         "gate": gate,
                     },
                 })
-                key = obs.strip().lower()
-                if key not in sess.spoken_finding_ids:
-                    sess.spoken_finding_ids.add(key)
+                if time.time() - getattr(sess, "_other_say", 0) > 25:  # say it rarely; never narrate the scene
+                    sess._other_say = time.time()
                     msg = {
                         "type": "guidance",
-                        "text": obs + " Point the camera at the Nano and breadboard.",
+                        "text": "I can't see your board yet. Hold the Nano and breadboard steady in view.",
                         "finding_ids": ["scene_other"],
                         "source": "cosmos",
                         "ms": meta.get("ms"),
