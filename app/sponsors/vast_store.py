@@ -22,6 +22,8 @@ def _get_client():
     global _client
     if _client is None:
         import boto3  # lazy: app must boot without it
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         from botocore.config import Config
 
         _client = boto3.client(
@@ -30,6 +32,7 @@ def _get_client():
             aws_access_key_id=settings.s3_access_key,
             aws_secret_access_key=settings.s3_secret_key,
             region_name="us-east-1",
+            verify=False,  # VAST cluster uses a self-signed cert (official skills use ssl_verify=False too)
             config=Config(connect_timeout=4, read_timeout=10, retries={"max_attempts": 1},
                           s3={"addressing_style": "path"}),
         )

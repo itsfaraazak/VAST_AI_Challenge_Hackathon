@@ -456,7 +456,17 @@ async def mistake_alert(sess, http) -> dict | None:
             if key not in spoken:
                 spoken.append(key)
                 _touch(sess)
-                return _mistake_msg(sess, m)
+                msg = _mistake_msg(sess, m)
+                try:  # Cosmos-Embed1 memory: have we seen this mistake before?
+                    from sponsors import embed_memory
+                    desc = f"{m['title']}. {m['explain']}"
+                    prior = await embed_memory.recall(sess, desc, http=http)
+                    if prior:
+                        msg["text"] += " That is the same slip as earlier, so let's lock it in this time."
+                    await embed_memory.remember(sess, desc, http=http)
+                except Exception:  # noqa: BLE001
+                    pass
+                return msg
     return None
 
 

@@ -121,6 +121,11 @@ async def run_worker(sess: Session, http: aiohttp.ClientSession) -> None:
                 else:
                     sp["status"] = "error"
                     sp["detail"] = f"failed: {meta.get('error')}"
+            if twin and twin.get("scene") == "bench":
+                # VAST S3 persistence (fails soft, traced as sponsor=vast)
+                from sponsors import vast_store
+                asyncio.create_task(vast_store.save_event(sess, "twin", twin))
+                asyncio.create_task(vast_store.save_event(sess, "frame", frame))
             if meta.get("ms"):
                 p95 = cosmos.record_latency(sess.cosmos_latencies, meta["ms"])
                 if p95 is not None and p95 > settings.cosmos_p95_degraded_s:
