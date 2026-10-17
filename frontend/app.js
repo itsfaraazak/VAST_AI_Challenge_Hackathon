@@ -402,8 +402,8 @@ async function startRecording(stream) {
     mrec.ondataavailable = (e) => {
       if (!e.data.size) return;
       mChunks.push(e.data); mBytes += e.data.size;
-      // keep the first chunk (webm header) and roll off the oldest after ~90 s (1 s timeslices)
-      while (mChunks.length > REC_MAX_MS / 1000 + 1 || mBytes > mMaxBytes) { if (mChunks.length < 3) break; mBytes -= mChunks[1].size; mChunks.splice(1, 1); }
+      // dropping mid-stream chunks would corrupt the webm, so stop at the cap instead
+      if (mChunks.length >= REC_MAX_MS / 1000 || mBytes >= mMaxBytes) { try { mrec.stop(); } catch {} $("btnVss").classList.remove("is-rec"); }
     };
     mrec.start(1000);
     $("btnVss").classList.add("is-rec");
