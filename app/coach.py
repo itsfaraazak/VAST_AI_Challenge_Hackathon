@@ -450,7 +450,18 @@ async def mistake_alert(sess, http) -> dict | None:
     if sess.coach["phase"] != "teaching":
         return None
     spoken = sess.coach["spoken_mistakes"]
-    for m in _diag(sess):
+    # The VLM's traced nets wobble between frames. Only speak a mistake once two consecutive
+    # Cosmos analyses agree on it (votes advance once per new twin, not per tick).
+    ver = getattr(sess, "last_cosmos_ts", 0)
+    votes = sess.coach.setdefault("mistake_votes", {"ver": None, "seen": {}})
+    diag = _diag(sess)
+    if votes["ver"] != ver:
+        votes["ver"] = ver
+        ids = {m["id"] for m in diag}
+        votes["seen"] = {i: votes["seen"].get(i, 0) + 1 for i in ids}
+    for m in diag:
+        if votes["seen"].get(m["id"], 0) < 2:
+            continue
         if m["severity"] == "critical" or m["severity"] == "warning":
             key = f"{m['id']}@{sess.coach['step_index']}"
             if key not in spoken:
