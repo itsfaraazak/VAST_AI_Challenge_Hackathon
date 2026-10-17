@@ -1,6 +1,6 @@
 /* Demo teleop: keyboard shortcuts that inject a believable error / success for a step, in case the live demo goes haywire.
- *   1..5            show a possible issue for step N
- *   Shift + 1..5    show "step N looks right" and move to the next step
+ *   1..5            step N PASSES: show "step N looks right" and move to the next step
+ *   Shift + 1..5    step N FAILS: show a possible issue for step N
  *   0 or Esc        clear the note
  *   ?               cheat sheet
  * It only feeds the normal UI handlers (window.__current.onBackend); no backend, no state of its own. */
@@ -24,7 +24,7 @@ function help() {
     d.style.cssText = "position:fixed;left:12px;bottom:12px;z-index:99;background:rgba(10,14,20,.92);border:1px solid rgba(120,200,255,.3);border-radius:10px;padding:10px 14px;font:12px/1.5 ui-monospace,monospace;color:#cfe;white-space:pre";
     document.body.appendChild(d);
   }
-  d.textContent = "TELEOP\n1-5        issue on step N\nShift+1-5  step N correct\n0 / Esc    clear";
+  d.textContent = "TELEOP\n1-5        step N passes\nShift+1-5  step N fails\n0 / Esc    clear";
   d.hidden = false; clearTimeout(help.t); help.t = setTimeout(() => (d.hidden = true), 4500);
 }
 
@@ -61,6 +61,6 @@ addEventListener("keydown", (e) => {
     const m = /^Digit([1-5])$/.exec(e.code || "");
     if (!m) return;
     e.preventDefault();
-    send(+m[1], e.shiftKey ? "ok" : "error");
+    send(+m[1], e.shiftKey ? "error" : "ok");
   } catch (err) { console.warn("teleop", err); }
 });

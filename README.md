@@ -177,7 +177,7 @@ cd app && python -m unittest discover -p '*test.py'
 4. Hold the mic and ask "why do I need a resistor?"
 5. Say "I want to build a traffic light with three LEDs". A new five-step plan appears, and the project is saved to VAST (`GET /api/projects`).
 
-Pressing `1`–`5` triggers a sample warning for that step and `Shift+1`–`5` a sample "step correct", for rehearsal. `?` shows the key list.
+For rehearsal, `1`–`5` shows "step N passes" and `Shift+1`–`5` shows a sample warning for step N. `0` or `Esc` clears it, `?` shows the key list.
 
 ---
 
