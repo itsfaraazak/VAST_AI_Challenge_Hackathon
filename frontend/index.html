@@ -16,124 +16,85 @@
 <body>
 <div class="grid-bg"></div>
 <div class="app" id="app">
-  <header class="top">
+  <header class="top glass">
     <div class="brand"><span class="brand__mark"></span><h1 class="brand__name">CURRENT</h1></div>
     <div class="board-sel" id="boardSel" role="group" aria-label="Board">
       <button data-board="nano" class="is-on">Nano</button><button data-board="esp32">ESP32</button>
     </div>
-    <p class="top__project" id="projectLabel">Ready to build</p>
-    <div class="sponsors" id="sponsors"></div>
-    <span class="chip chip--live" id="chipLive"><i class="pulse"></i>ALWAYS ON · <b id="liveWord">connecting</b></span>
-    <span class="chip" id="chipVerify">VERIFY <b id="verifyWord">—</b></span>
-    <span class="chip" id="chipConf">CONF <b id="confWord">—</b></span>
-    <button class="btn" id="btnVoice" title="Spoken coaching" hidden></button>
-    <button class="btn" id="btnVss" title="Upload the recorded session to VAST Video Search &amp; Summary">VAST VSS</button>
-    <button class="join" id="joinBtn" title="Session code / open on phone"><span id="codeWord">······</span><span id="qrMini"></span></button>
+    <p class="top__project" id="projectLabel">What do you want to build?</p>
+    <div class="chips">
+      <span class="chip chip--live" id="chipLive"><i class="pulse"></i>ALWAYS ON · <b id="liveWord">connecting</b></span>
+      <span class="chip" id="chipVerify">VERIFY · <b id="verifyWord">—</b></span>
+      <span class="chip" id="chipConf">CONF · <b id="confWord">—</b></span>
+    </div>
+    <button class="join" id="joinBtn" title="Open on phone"><span id="codeWord">······</span><span id="qrMini"></span></button>
+    <button class="btn" id="btnVoice" title="Spoken coaching">🔊 Voice</button>
+    <button class="btn" id="btnVss" title="Upload the recorded session to VAST Video Search &amp; Summary">Send session to VAST VSS</button>
+    <button class="btn" id="btnTrace">Behind the scenes</button>
   </header>
 
+  <div class="sponsors" id="sponsors"></div>
+
   <main class="stage">
-    <section class="feed panel" id="feedPanel">
-      <div class="ptag"><span>BENCH CAM</span><span id="feedClock">00:00:00</span></div>
-      <div class="feed__view">
-        <video id="benchVideo" class="feed__video" playsinline muted autoplay></video>
-        <canvas id="demoFeed" class="feed__demo" width="640" height="360"></canvas>
-        <canvas id="yoloOverlay" class="feed__overlay"></canvas>
-        <div class="scanline"></div>
-        <div class="feed__idle" id="feedIdle">
-          <p>Point the camera at the breadboard.</p>
-          <button class="btn btn--pri" id="armCamera">Arm camera</button>
-        </div>
+    <section class="feed glass" id="feedPanel">
+      <div class="panel-tag">BENCH CAM · <span id="feedClock">00:00:00</span> · <span id="cosmosBadge">cosmos · idle</span></div>
+      <video id="benchVideo" class="feed__video" playsinline muted autoplay></video>
+      <canvas id="demoFeed" class="feed__demo" width="640" height="360"></canvas>
+      <canvas id="yoloOverlay" class="feed__overlay"></canvas>
+      <div class="scanline"></div>
+      <div class="feed__idle" id="feedIdle">
+        <p>Point the camera at the breadboard.</p>
+        <button class="btn btn--big" id="armCamera">Arm camera</button>
       </div>
       <div class="feed__foot">
-        <div class="statusline" id="statusLine">YOLO — · cosmos idle</div>
-        <select id="camSel" class="vsel" title="Camera" style="display:none;max-width:130px"></select>
-        <label class="tog"><input type="checkbox" id="togBoxes" checked /> boxes</label>
+        <label><input type="checkbox" id="togBoxes" checked /> boxes</label>
         <button class="btn btn--sm" id="btnForce">Force Cosmos</button>
+        <pre id="pipeLog" class="pipelog">pipeline idle</pre>
       </div>
-      <pre id="pipeLog" class="pipelog">pipeline idle</pre>
-      <span id="cosmosBadge" hidden></span>
     </section>
 
-    <section class="hero panel" id="heroPanel">
-      <div class="ptag"><span>DIGITAL TWIN · <b id="twinState" class="stale">STALE</b></span><span id="vizHint">3D circuit</span></div>
-      <div class="hero__view">
-        <div id="scene3d" class="scene3d"></div>
-        <div class="mistake" id="mistake" hidden>
-          <div class="mistake__tag" id="mistakeTag">MISTAKE DETECTED</div>
-          <div class="mistake__title" id="mistakeTitle"></div>
-          <div class="mistake__fix" id="mistakeFix"></div>
-        </div>
-        <div class="flashfx" id="flashfx"></div>
-        <div class="empty" id="empty">
-          <div class="empty__card">
-            <span class="eyebrow">NEW PROJECT</span>
-            <h2>What do you want to build?</h2>
-            <form id="startForm" class="startform">
-              <input id="startInput" autocomplete="off" placeholder="e.g. a traffic light that changes every 3 seconds" />
-              <button class="btn btn--pri" type="submit">Start</button>
-            </form>
-            <div class="examples" id="examples"></div>
-          </div>
-        </div>
+    <section class="hero glass" id="heroPanel">
+      <div class="panel-tag">DIGITAL TWIN · <span id="vizHint">3D circuit</span></div>
+      <div id="scene3d" class="scene3d"></div>
+      <div class="mistake" id="mistake" hidden>
+        <div class="mistake__tag" id="mistakeTag">MISTAKE DETECTED</div>
+        <div class="mistake__title" id="mistakeTitle"></div>
+        <div class="mistake__fix" id="mistakeFix"></div>
       </div>
-      <div class="seen"><span class="seen__lab">SEEN</span><div id="seenList" class="seen__list"><i class="muted">nothing detected yet</i></div></div>
+      <div class="flashfx" id="flashfx"></div>
     </section>
-
-    <aside class="side panel" id="side">
-      <div class="tabs" id="tabs" role="tablist">
-        <button data-tab="seq" class="is-on">Sequence</button>
-        <button data-tab="mem">Memory <span class="count" id="memCount" hidden></span></button>
-        <button data-tab="trace" id="btnTrace">Trace</button>
-      </div>
-      <div class="tabpane is-on" id="pane-seq">
-        <div class="seqhead">
-          <div class="seqhead__row"><h3 id="seqTitle">No project yet</h3><button class="btn btn--sm" id="btnNew">+ New</button></div>
-          <div class="prog"><i id="railBar"></i></div>
-          <div class="seqhead__meta" id="seqMeta">Pick a project to begin</div>
-        </div>
-        <ol class="steps" id="stepList"></ol>
-        <div class="why" id="whyBox"></div>
-      </div>
-      <div class="tabpane" id="pane-mem">
-        <div class="memhead"><span class="eyebrow">DIGITAL TWIN MEMORY · VAST</span></div>
-        <div id="memList" class="memlist"><p class="muted pad">No saved projects yet.</p></div>
-      </div>
-      <div class="tabpane" id="pane-trace"><div id="traceRoot"></div></div>
-    </aside>
   </main>
 
-  <section class="coach panel" id="coachDock">
-    <div class="coach__main">
-      <div class="coach__head">
-        <span class="avatar"><i class="pulse"></i></span><span class="coach__who">COACH</span>
-        <span class="badge" id="coachSrc">curriculum</span><span class="wave" id="wave"><i></i><i></i><i></i><i></i></span><button type="button" class="btn btn--sm" id="btnMute">Mute</button><select class="vsel" id="voiceSel" title="Voice"></select>
-        <span class="coach__user" id="coachUser"></span>
-      </div>
-      <p class="coach__line" id="coachLine">Tell me what you want to build, or pick an example.</p>
-      <div class="thread" id="thread"></div>
-    </div>
-    <div class="coach__side">
-      <div class="quick" id="quick">
-        <button class="qchip" data-q="next">Next step</button><button class="qchip" data-q="Give me a hint">Hint</button>
-        <button class="qchip" data-q="Why?">Why?</button><button class="qchip" data-q="I'm stuck">I'm stuck</button>
-      </div>
-      <form class="composer" id="chatForm">
-        <input id="chatInput" autocomplete="off" placeholder="Ask the coach, or say next..." />
-        <button type="button" class="mic" id="voiceBtn" aria-label="Hold to talk">
-          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
-        </button>
-        <button type="submit" class="btn btn--pri" id="btnSend">Send</button>
-        <button type="button" id="btnNext" hidden></button>
-      </form>
-    </div>
+  <nav class="rail glass" id="rail">
+    <div class="rail__prog"><i id="railBar"></i></div>
+    <ol class="steps" id="stepList"></ol>
+    <div class="why" id="whyBox"></div>
+  </nav>
+
+  <section class="coach glass" id="coachDock">
+    <div class="coach__who"><span class="pulse"></span>COACH</div>
+    <p class="coach__line" id="coachLine">Say hello — or tell me what you want to build.</p>
+    <p class="coach__user" id="coachUser"></p>
+    <form class="coach__form" id="chatForm">
+      <input id="chatInput" autocomplete="off" placeholder="Ask, or say “next”…" />
+      <button type="button" class="mic" id="voiceBtn" aria-label="Hold to talk">
+        <svg viewBox="0 0 24 24" width="30" height="30"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+      </button>
+      <button type="button" class="btn" id="btnNext">Next</button>
+    </form>
   </section>
 
-  <div class="qrpop panel" id="qrPop" hidden>
-    <span class="eyebrow">SESSION</span>
+  <aside class="drawer glass" id="drawer">
+    <header><h2>Behind the scenes</h2><button class="btn btn--sm" id="drawerClose">×</button></header>
+    <div id="traceRoot"></div>
+  </aside>
+
+  <div class="qrpop glass" id="qrPop" hidden>
     <div id="qrBig"></div><p>Scan with phone</p><code id="qrUrl"></code>
   </div>
+
+  <!-- phone-only chrome -->
   <div class="phonebar" id="phoneBar"><span id="phoneStatus">connecting…</span></div>
-  <aside id="drawer" hidden><button id="drawerClose"></button></aside>
 </div>
 
 <script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}</script>

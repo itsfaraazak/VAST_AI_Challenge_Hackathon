@@ -1,4 +1,3 @@
-import { createVoice } from "./voice.js";
 /** CURRENT shell: hero layout, coach subtitles, voice, QR, trace/scene integration. */
 const $ = (id) => document.getElementById(id);
 const Q = new URLSearchParams(location.search);
@@ -11,7 +10,7 @@ document.body.classList.toggle("phone", PHONE);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const video = $("benchVideo"), overlay = $("yoloOverlay"), feedPanel = $("feedPanel");
 let coach = null, ws = null, camWs = null, sessionCode = Q.get("code"), board = "nano";
-let lastYolo = null, prevMistakes = 0, projectsCache = [], thread = [], lastYoloMs = null, lastCosmos = "idle";
+let lastYolo = null, prevMistakes = 0, voiceOn = true, userGesture = false, lastSpoken = "";
 
 /* ---------- status ---------- */
 function setLive(word, ok = true) {
@@ -29,35 +28,27 @@ function setConf(v) {
 const setPipe = (t) => { const p = $("pipeLog"); if (p && t) p.textContent = t; };
 
 /* ---------- coach subtitle + voice ---------- */
-const SRC = { llm: "W&B Llama", wandb: "W&B Llama", verifier: "verifier", curriculum: "curriculum" };
-function pushThread(text, user) {
-  thread.push({ text, user }); thread = thread.slice(-4);
-  $("thread").innerHTML = thread.slice(0, -1).slice(-3).map((m) => `<p class="${m.user ? "u" : ""}">${esc(m.text)}</p>`).join("");
-}
-function showCoach(text, source = "llm") {
+function showCoach(text) {
   const el = $("coachLine");
-  const prev = el.dataset.raw;
-  if (prev && prev !== text) pushThread(prev, false);
-  el.dataset.raw = text;
-  el.innerHTML = String(text).split(/\s+/).map((w, i) => `<span class="w" style="animation-delay:${Math.min(i * 35, 1500)}ms">${esc(w)}</span>`).join(" ");
-  const b = $("coachSrc"); b.textContent = SRC[source] || source; b.className = "badge " + (source === "wandb" ? "llm" : source);
+  el.innerHTML = String(text).split(/\s+/).map((w, i) => `<span class="w" style="animation-delay:${Math.min(i * 40, 1800)}ms">${esc(w)}</span>`).join(" ");
 }
-const voice = createVoice({ onState: (st) => {
-  if (st.speaking != null) $("wave").classList.toggle("on", st.speaking);
-  if (st.muted != null) $("btnMute").textContent = st.muted ? "Unmute" : "Mute";
-  if (st.voices) fillVoices();
-} });
-function fillVoices() {
-  const sel = $("voiceSel"); const vs = voice.pick();
-  sel.hidden = !vs.length;
-  sel.innerHTML = vs.map((v) => `<option ${v.name === voice.chosen ? "selected" : ""}>${esc(v.name)}</option>`).join("");
+function speak(text) {
+  if (!voiceOn || !userGesture || !window.speechSynthesis || !text || text === lastSpoken) return;
+  lastSpoken = text;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1.05;
+    speechSynthesis.speak(u);
+  } catch {}
 }
-fillVoices(); setTimeout(fillVoices, 800);
-$("voiceSel").onchange = (e) => voice.setVoice(e.target.value);
-$("btnMute").onclick = () => { voice.unlock(); voice.setMuted(!voice.muted); };
-$("btnMute").textContent = voice.muted ? "Unmute" : "Mute";
-addEventListener("pointerdown", () => voice.unlock(), { once: true });
-addEventListener("keydown", () => voice.unlock(), { once: true });
+addEventListener("pointerdown", () => { userGesture = true; }, { once: true });
+$("btnVoice").onclick = () => {
+  voiceOn = !voiceOn; userGesture = true;
+  $("btnVoice").classList.toggle("is-off", !voiceOn);
+  $("btnVoice").textContent = voiceOn ? "🔊 Voice" : "🔇 Muted";
+  if (!voiceOn) speechSynthesis?.cancel();
+};
 
 /* ---------- coach state ---------- */
 function mistakeBanner(mistakes) {
@@ -85,57 +76,33 @@ function mistakeBanner(mistakes) {
   prevMistakes = n;
 }
 
-const EXAMPLES = [["Blink", "blink"], ["Traffic light"], ["Button + LED"], ["Buzzer alarm"], ["Potentiometer dimmer"]];
-$("examples").innerHTML = EXAMPLES.map(([t, id]) => `<button type="button" class="ex" data-t="${esc(t)}" ${id ? `data-id="${id}"` : ""}>${esc(t)}</button>`).join("");
-function startProject(prompt, id) {
-  prompt = (prompt || "").trim(); if (!prompt && !id) return;
-  const m = { type: "coach_start", board };
-  if (id) m.project_id = id;
-  m.prompt = prompt;
-  $("empty").classList.add("is-hidden");
-  pushThread(prompt, true); $("coachUser").textContent = `You: ${prompt}`;
-  send(m);
-}
-$("examples").addEventListener("click", (e) => { const b = e.target.closest(".ex"); if (b) startProject(b.dataset.t, b.dataset.id); });
-$("startForm").addEventListener("submit", (e) => { e.preventDefault(); const v = $("startInput").value; $("startInput").value = ""; startProject(v); });
-$("btnNew").onclick = () => { $("empty").classList.remove("is-hidden"); $("startInput").focus(); };
-
-function stepCard(s, i, idx) {
-  const st = i < idx ? "is-done" : i === idx ? "is-active" : "";
-  const quiz = s.check || s.quiz || s.question;
-  const body = i === idx ? `<div class="step__body">
-    ${s.action ? `<div><b>DO</b>${esc(s.action)}</div>` : ""}
-    ${s.why || s.concept ? `<div><b>WHY</b>${esc(s.why || s.concept)}</div>` : ""}
-    ${s.hole_hint ? `<div class="hole"><b>HOLES</b>${esc(s.hole_hint)}</div>` : ""}
-    ${quiz ? `<div class="quiz"><b>CHECK</b>${esc(typeof quiz === "string" ? quiz : quiz.q || quiz.question || "")}</div>` : ""}</div>` : "";
-  return `<li class="step ${st}" data-index="${i}"><div class="step__row"><b>${i < idx ? "✓" : String(i + 1).padStart(2, "0")}</b><span class="step__t">${esc(s.title)}</span><button type="button" class="step__more" data-i="${i}" title="More" aria-label="Step options">⋯</button></div>${body}</li>`;
-}
 function applyCoach(state) {
   if (!state) return;
   coach = { ...(coach || {}), ...state };
   if (state.board) setBoardUi(state.board);
-  const p = state.project || coach.project;
-  const steps = (p && p.steps) || state.steps || coach.steps || [];
+  const p = state.project;
+  $("projectLabel").innerHTML = p
+    ? `Building <em>${esc(p.title.split("—")[0].trim())}</em> · ${board === "esp32" ? "ESP32" : "Arduino Nano"}`
+    : "What do you want to build?";
+  const steps = state.steps || coach.steps || [];
   const idx = state.step_index || 0;
   const total = state.step_total || steps.length;
-  const teaching = state.phase === "teaching" && steps.length;
-  $("projectLabel").innerHTML = p && teaching ? `Building <em>${esc(String(p.title).split("—")[0].trim())}</em> · ${board === "esp32" ? "ESP32" : "Arduino Nano"}` : "Ready to build";
-  $("empty").classList.toggle("is-hidden", !!teaching);
-  $("seqTitle").textContent = teaching ? p?.title || "Project" : "No project yet";
-  $("seqMeta").textContent = teaching ? `Step ${Math.min(idx + 1, total)} of ${total}${state.done ? " · complete" : ""}` : "Pick a project to begin";
-  $("railBar").style.width = teaching && total ? Math.min(100, ((idx + (state.done ? 1 : 0)) / total) * 100) + "%" : "0";
-  if (teaching) {
-    $("stepList").innerHTML = steps.map((s, i) => stepCard(s, i, idx)).join("");
+  $("railBar").style.width = total ? ((idx + (state.done ? 1 : 0.4)) / total) * 100 + "%" : "0";
+  if (state.phase === "teaching" && steps.length) {
+    $("stepList").innerHTML = steps.map((s, i) =>
+      `<li class="step ${i < idx ? "is-done" : i === idx ? "is-active" : ""}" data-index="${i}"><b>${String(i + 1).padStart(2, "0")}</b>${esc(s.title)}</li>`).join("");
     const cur = state.step || steps[idx];
+    const why = cur?.why || cur?.concept;
+    $("whyBox").innerHTML = why ? `<b>WHY ›</b> ${esc(why)}` : "";
     $("vizHint").textContent = cur?.title || "3D circuit";
-    $("stepList").querySelector(".is-active")?.scrollIntoView?.({ block: "nearest" });
   } else {
     $("stepList").innerHTML = (state.projects || []).map((pr, i) =>
-      `<li class="step" data-project="${esc(pr.id)}"><div class="step__row"><b>${String(i + 1).padStart(2, "0")}</b><span class="step__t">${esc(pr.title)}</span></div></li>`).join("");
+      `<li class="step" data-project="${esc(pr.id)}"><b>${String(i + 1).padStart(2, "0")}</b>${esc(pr.title)}</li>`).join("");
+    $("whyBox").textContent = "";
   }
   mistakeBanner(state.mistakes || []);
   feedScene({ coach: state });
-  if (!state.mistakes?.length && teaching) setVerify(state.done ? "BUILD COMPLETE" : "WATCHING", "");
+  if (!state.mistakes?.length && state.phase === "teaching") setVerify(state.step_index >= total - 1 && state.done ? "BUILD COMPLETE" : "WATCHING", "");
 }
 
 let lastTwin = null, lastFindings = null;
@@ -146,7 +113,7 @@ function feedScene(extra = {}) {
   try {
     window.CurrentScene?.update({
       board, project: c.project, stepIndex: c.step_index || 0, twin: lastTwin, findings: lastFindings,
-      steps: (c.project && c.project.steps) || c.steps, step: c.step, mistakes: c.mistakes || [],
+      steps: c.steps, step: c.step, mistakes: c.mistakes || [],
     });
   } catch (e) { console.warn("scene update", e); }
 }
@@ -159,7 +126,7 @@ function setBoardUi(b) {
 /* ---------- yolo overlay ---------- */
 function drawYolo(msg) {
   lastYolo = msg;
-  const w = overlay.parentElement.clientWidth, h = overlay.parentElement.clientHeight;
+  const w = feedPanel.clientWidth, h = feedPanel.clientHeight;
   overlay.width = w; overlay.height = h;
   const ctx = overlay.getContext("2d");
   ctx.clearRect(0, 0, w, h);
@@ -190,41 +157,6 @@ function drawYolo(msg) {
 }
 addEventListener("resize", () => lastYolo && drawYolo(lastYolo));
 
-function statusLine() {
-  $("statusLine").textContent = `YOLO ${lastYoloMs == null ? "—" : Math.round(lastYoloMs) + "ms"} · cosmos ${lastCosmos}`;
-}
-let twinAt = 0;
-function renderSeen(t) {
-  const comps = t.components || [];
-  twinAt = Date.now();
-  $("seenList").innerHTML = comps.length ? comps.map((c) => `<span class="pchip">${esc(c.type || c.id)}</span>`).join("") : '<i class="muted">nothing detected yet</i>';
-  $("twinState").textContent = "LIVE"; $("twinState").className = "live";
-}
-setInterval(() => { if (twinAt && Date.now() - twinAt > 15000) { $("twinState").textContent = "STALE"; $("twinState").className = "stale"; } }, 2000);
-const ago = (u) => { if (!u) return ""; const d = typeof u === "number" ? (u > 1e12 ? u : u * 1000) : Date.parse(u); if (!d) return String(u); const m = Math.round((Date.now() - d) / 60000); return m < 1 ? "just now" : m < 60 ? m + "m ago" : m < 1440 ? Math.round(m / 60) + "h ago" : Math.round(m / 1440) + "d ago"; };
-function renderProjects(items) {
-  projectsCache = items;
-  $("memCount").hidden = !items.length; $("memCount").textContent = items.length;
-  $("memList").innerHTML = items.length ? items.map((p) => {
-    const pct = Math.round(p.pct ?? (p.steps_total ? (p.step_index / p.steps_total) * 100 : 0));
-    return `<div class="mem ${pct >= 100 ? "is-done" : ""}"><div class="mem__top"><span class="mem__title">${esc(p.title)}</span><button class="btn btn--sm" data-resume="${esc(p.key)}">Resume</button></div>
-    <div class="mem__row"><div class="prog"><i style="width:${pct}%"></i></div><span class="mem__pct">${pct}%</span></div>
-    <div class="mem__meta">${esc((p.board || "").toUpperCase())} · ${ago(p.updated)}${p.parts_seen?.length ? " · " + esc(p.parts_seen.slice(0, 3).join(", ")) : ""}</div></div>`;
-  }).join("") : '<p class="muted pad">No saved projects yet.</p>';
-}
-$("memList").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-resume]"); if (!b) return;
-  send({ type: "resume_project", key: b.dataset.resume }); tab("seq");
-});
-function tab(n) {
-  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("is-on", b.dataset.tab === n));
-  document.querySelectorAll(".tabpane").forEach((p) => p.classList.toggle("is-on", p.id === "pane-" + n));
-}
-$("tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) tab(b.dataset.tab); });
-async function loadProjects() {
-  try { const r = await fetch(`${BASE}/api/projects`); if (r.ok) { const j = await r.json(); renderProjects(Array.isArray(j) ? j : j.items || []); } } catch {}
-}
-
 /* ---------- backend message router (also used by replay) ---------- */
 function onBackend(msg) {
   if (!msg) return;
@@ -237,27 +169,24 @@ function onBackend(msg) {
   }
   if (msg.type === "yolo") {
     drawYolo(msg);
-    lastYoloMs = msg.ms; statusLine();
     setPipe(`YOLO ${Math.round(msg.ms || 0)}ms · ${(msg.labels || []).join(", ") || "none"}\ngate: ${msg.gate?.allow_cosmos ? "ALLOW" : "SKIP"} ${msg.gate?.reason || ""}`);
     if (msg.gate?.confidence != null) setConf(msg.gate.confidence);
   }
-  if (msg.type === "perception_skip") { lastCosmos = "gated"; statusLine(); setLive("aim at board", false); }
+  if (msg.type === "perception_skip") { $("cosmosBadge").textContent = "cosmos · gated"; setLive("aim at board", false); }
   if (msg.type === "cosmos_status") {
-    if (msg.state === "calling") { lastCosmos = "thinking…"; setLive("cosmos thinking"); }
-    if (msg.state === "done") { lastCosmos = (msg.ms / 1000).toFixed(1) + "s"; setLive("watching"); }
-    if (msg.state === "error") { lastCosmos = "error"; setLive("cosmos error", false); }
-    statusLine();
+    const b = $("cosmosBadge");
+    if (msg.state === "calling") { b.textContent = "cosmos · calling…"; setLive("cosmos thinking"); }
+    if (msg.state === "done") { b.textContent = `cosmos · ${Math.round(msg.ms || 0)}ms`; setLive("watching"); }
+    if (msg.state === "error") { b.textContent = "cosmos · error"; setLive("cosmos error", false); }
   }
   if (msg.type === "twin") {
     const t = msg.twin || {};
     if (t.confidence != null) setConf(t.confidence);
-    renderSeen(t); feedScene({ twin: t, findings: msg.findings });
+    feedScene({ twin: t, findings: msg.findings });
   }
-  if (msg.type === "projects") renderProjects(msg.items || []);
-  if (msg.type === "resumed" || msg.type === "project_resumed") send({ type: "projects_list" });
   if (msg.findings && msg.type !== "twin") feedScene({ findings: msg.findings });
-  if (msg.type === "guidance" && msg.text) { showCoach(msg.text, msg.source || "llm"); voice.speakGuidance(msg.text, msg.source || "llm"); }
-  if (msg.type === "transcript" && msg.text && msg.asr === "canary") { $("coachUser").textContent = `You: ${msg.text}`; pushThread(msg.text, true); voice.cancel(); }
+  if (msg.type === "guidance" && msg.text) { showCoach(msg.text); speak(msg.text); }
+  if (msg.type === "transcript" && msg.text && msg.asr === "canary") $("coachUser").textContent = `You: ${msg.text}`;
   if (msg.type === "vss_upload") vssToast(msg.ok ? `Indexed in VAST VSS: ${msg.object_key || "ok"}` : `VSS upload failed: ${msg.detail || "error"}`, !msg.ok);
   if (msg.type === "asr_status" && msg.ok === false) setLive("mic miss", false);
 }
@@ -270,7 +199,7 @@ function routeTrace(msg) {
     $("traceRoot").prepend(d);
   }
 }
-window.CurrentApp = { onBackend, setBoardUi, speak: (t) => voice.speakGuidance(t, "coach"), get board() { return board; } };
+window.CurrentApp = { onBackend, setBoardUi, speak, get board() { return board; } };
 
 /* ---------- send ---------- */
 function send(obj) {
@@ -281,37 +210,25 @@ $("chatForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const t = $("chatInput").value.trim();
   if (!t) return;
-  $("coachUser").textContent = `You: ${t}`; pushThread(t, true); voice.cancel();
+  $("coachUser").textContent = `You: ${t}`;
   $("chatInput").value = "";
   send({ type: "ask", text: t });
 });
-$("quick").addEventListener("click", (e) => { const b = e.target.closest(".qchip"); if (!b) return; pushThread(b.textContent, true); send({ type: "ask", text: b.dataset.q }); });
+$("btnNext").onclick = () => send({ type: "ask", text: "next" });
 $("btnForce").onclick = () => { send({ type: "force_analyze" }); setPipe("force analyze requested…"); };
 $("togBoxes").onchange = () => lastYolo && drawYolo(lastYolo);
-function closeStepMenu() { document.getElementById("stepMenu")?.remove(); }
-document.addEventListener("click", (e) => { if (!e.target.closest(".step__more, #stepMenu")) closeStepMenu(); });
-function openStepMenu(btn) {
-  closeStepMenu();
-  const i = +btn.dataset.i, r = btn.getBoundingClientRect(), m = document.createElement("div");
-  m.id = "stepMenu"; m.className = "stepmenu";
-  m.innerHTML = [["complete", "Mark step as done"], ["skip", "Skip this step"], ["dismiss", "System is wrong: dismiss warning"], ["recheck", "Re-check the board now"], ["restart", "Restart this step"]]
-    .map(([a, t]) => `<button type="button" data-a="${a}">${t}</button>`).join("");
-  m.style.top = Math.min(r.bottom + 4, innerHeight - 190) + "px"; m.style.left = Math.max(8, r.right - 220) + "px";
-  m.addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (!b) return; send({ type: "override", action: b.dataset.a, index: i }); closeStepMenu(); });
-  document.body.appendChild(m);
-}
 $("stepList").addEventListener("click", (e) => {
-  const more = e.target.closest(".step__more");
-  if (more) { e.stopPropagation(); openStepMenu(more); return; }
   const li = e.target.closest(".step");
   if (!li) return;
   if (li.dataset.index != null) send({ type: "coach_step", index: +li.dataset.index });
-  else if (li.dataset.project) send({ type: "coach_start", project_id: li.dataset.project, prompt: li.textContent.trim(), board });
+  else if (li.dataset.project) send({ type: "coach_start", project_id: li.dataset.project, board });
 });
 document.querySelectorAll("#boardSel button").forEach((b) => b.addEventListener("click", () => {
   setBoardUi(b.dataset.board);
-  if (coach?.phase === "teaching") send({ type: "coach_start", project_id: coach.project_id || "blink", prompt: coach.project?.title || "Blink", board });
+  send({ type: "coach_start", project_id: "blink", board });
 }));
+$("btnTrace").onclick = () => $("drawer").classList.toggle("open");
+$("drawerClose").onclick = () => $("drawer").classList.remove("open");
 
 /* ---------- QR / join ---------- */
 function joinUrl() {
@@ -363,59 +280,25 @@ async function connect() {
   renderJoin();
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}${BASE}/ws?code=${sessionCode}&role=${role}`);
-  ws.onopen = () => { setLive("watching"); send({ type: "projects_list" }); };
+  ws.onopen = () => setLive("watching");
   ws.onclose = () => { setLive("reconnecting", false); setTimeout(() => connect().catch(() => {}), 2000); };
   ws.onmessage = (ev) => { try { onBackend(JSON.parse(ev.data)); } catch {} };
 }
 
 /* ---------- camera ---------- */
-let camDeviceId = localStorage.getItem("camDeviceId") || "";
-function camMsg(t, bad) { const p = $("feedIdle").querySelector("p"); p.textContent = t; p.style.color = bad ? "#ff8a8a" : ""; }
-async function openStream() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    throw Object.assign(new Error(isSecureContext ? "This browser has no camera API." : "Camera needs HTTPS. Open the https:// workshop URL or http://localhost."), { name: "NoCameraApi" });
-  }
-  const tries = [];
-  if (camDeviceId) tries.push({ video: { deviceId: { exact: camDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-  tries.push({ video: { facingMode: PHONE ? "environment" : "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-  tries.push({ video: true, audio: false });
-  let err;
-  for (const c of tries) { try { return await navigator.mediaDevices.getUserMedia(c); } catch (e) { err = e; if (e.name === "NotAllowedError") break; } }
-  throw err;
-}
-async function fillCams() {
-  const sel = $("camSel"); if (!sel || !navigator.mediaDevices?.enumerateDevices) return;
-  const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
-  const rank = (d) => (/desk view/i.test(d.label) ? 0 : /continuity|iphone|ipad/i.test(d.label) ? 1 : 2);
-  devs.sort((x, y) => rank(x) - rank(y));
-  sel.innerHTML = devs.map((d, i) => `<option value="${esc(d.deviceId)}">${esc(d.label || "Camera " + (i + 1))}</option>`).join("");
-  if (camDeviceId && devs.some((d) => d.deviceId === camDeviceId)) sel.value = camDeviceId;
-  sel.style.display = devs.length > 1 ? "" : "none";
-}
-async function armCamera() {
-  camMsg("Starting camera…");
+$("armCamera").onclick = async () => {
   try {
-    const old = video.srcObject; if (old) old.getTracks().forEach((t) => t.stop());
-    const stream = await openStream(); console.log("cam: stream ok");
-    video.srcObject = stream; await Promise.race([video.play(), new Promise((r) => setTimeout(r, 2500))]); console.log("cam: playing", video.videoWidth);
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: PHONE ? "environment" : "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    video.srcObject = stream; await video.play();
     video.classList.add("is-live"); $("feedIdle").classList.add("is-hidden");
-    if (!PHONE && !DEMO && (!camWs || camWs.readyState > 1)) { // laptop cam: frames must come from a phone-role socket
+    if (!PHONE && !DEMO) { // laptop cam: frames must come from a phone-role socket
       const proto = location.protocol === "https:" ? "wss" : "ws";
       camWs = new WebSocket(`${proto}://${location.host}${BASE}/ws?code=${sessionCode}&role=phone`);
     }
-    frameLoop();                                   // frames first: nothing below may stop detection
-    try { startRecording(stream); } catch {}
-    fillCams().catch(() => {});
-    setLive("watching");
-  } catch (e) {
-    $("feedIdle").classList.remove("is-hidden");
-    const why = { NotAllowedError: "Camera permission blocked. Click the camera icon in the address bar, allow it, then retry.", NotFoundError: "No camera found. Plug one in or pick another device.", NotReadableError: "The camera is busy in another app or tab. Close it and retry.", NoCameraApi: e.message }[e.name] || `Camera error: ${e.name || ""} ${e.message || ""}`;
-    camMsg(why, true); setLive("camera error", false); console.error("camera", e);
-  }
-}
-$("armCamera").onclick = armCamera;
-$("camSel")?.addEventListener("change", (e) => { camDeviceId = e.target.value; localStorage.setItem("camDeviceId", camDeviceId); armCamera(); });
-if (Q.get("autoarm") === "1") setTimeout(armCamera, 600);
+    startRecording(stream);
+    frameLoop();
+  } catch (e) { setLive("camera denied", false); }
+};
 if (PHONE && !DEMO) { $("feedIdle").querySelector("p").textContent = "Tap to start the camera"; }
 let looping = false;
 function frameLoop() {
@@ -449,7 +332,7 @@ function encodeWav(chunks, rate) {
   return buf;
 }
 async function recStart() {
-  if (rec) return; voice.unlock(); voice.cancel();
+  if (rec) return; userGesture = true;
   if (DEMO) { $("voiceBtn").classList.add("is-hot"); return; }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -489,7 +372,7 @@ else setTimeout(() => {   // fallback: legacy Nano viewer
   t.onload = () => { const s = document.createElement("script"); s.src = "./nano3d.js"; document.body.appendChild(s); };
   document.body.appendChild(t);
 }, 1500);
-loadSponsors(); loadHealth(); loadProjects(); setInterval(loadHealth, 30000);
+loadSponsors(); loadHealth(); setInterval(loadHealth, 30000);
 
 if (DEMO) {
   sessionCode = sessionCode || "DEMO42"; renderJoin(); setLive("watching");

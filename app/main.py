@@ -33,6 +33,7 @@ from verifier.engine import verify_twin
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("app")
 
+NO_CACHE = {"Cache-Control": "no-store, max-age=0"}  # never let a browser mix old assets with a new page
 APP_DIR = Path(__file__).resolve().parent
 # Prefer merged CURRENT UI from frontend/; fall back to app/static
 FRONTEND = (APP_DIR.parent / "frontend").resolve()
@@ -368,7 +369,7 @@ async def api_projects(request: web.Request) -> web.Response:
 
 
 async def index(_: web.Request) -> web.Response:
-    return web.FileResponse(UI_ROOT / "index.html")
+    return web.FileResponse(UI_ROOT / "index.html", headers=NO_CACHE)
 
 
 async def on_start(app: web.Application) -> None:
@@ -413,7 +414,7 @@ def create_app() -> web.Application:
             path = (UI_ROOT / name).resolve()
             if not str(path).startswith(str(UI_ROOT.resolve())) or not path.is_file():
                 raise web.HTTPNotFound()
-            return web.FileResponse(path)
+            return web.FileResponse(path, headers=NO_CACHE)
 
         app.router.add_get("/{name:[A-Za-z0-9_.\\-]+\\.(?:js|css|json|webmanifest|svg|png|glb|md)}", _asset)
     if STATIC.exists():
