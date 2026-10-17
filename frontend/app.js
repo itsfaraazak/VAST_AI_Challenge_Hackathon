@@ -187,6 +187,7 @@ function onBackend(msg) {
   if (msg.findings && msg.type !== "twin") feedScene({ findings: msg.findings });
   if (msg.type === "guidance" && msg.text) { showCoach(msg.text); speak(msg.text); }
   if (msg.type === "transcript" && msg.text && msg.asr === "canary") $("coachUser").textContent = `You: ${msg.text}`;
+  if (msg.type === "vss_upload") vssToast(msg.ok ? `Indexed in VAST VSS: ${msg.object_key || "ok"}` : `VSS upload failed: ${msg.detail || "error"}`, !msg.ok);
   if (msg.type === "asr_status" && msg.ok === false) setLive("mic miss", false);
 }
 function routeTrace(msg) {
@@ -294,6 +295,7 @@ $("armCamera").onclick = async () => {
       const proto = location.protocol === "https:" ? "wss" : "ws";
       camWs = new WebSocket(`${proto}://${location.host}${BASE}/ws?code=${sessionCode}&role=phone`);
     }
+    startRecording(stream);
     frameLoop();
   } catch (e) { setLive("camera denied", false); }
 };
@@ -378,3 +380,54 @@ if (DEMO) {
 } else {
   connect().catch(() => setLive("backend unreachable", false));
 }
+
+
+/* ---------- session recording -> VAST VSS ---------- */
+let mrec = null, mChunks = [], mBytes = 0, mMaxBytes = 20 * 1024 * 1024, uploading = false;
+const REC_MAX_MS = 90000;
+function vssToast(text, bad = false, sticky = false) {
+  const t = $("vssToast"); t.textContent = text; t.classList.toggle("bad", !!bad); t.hidden = false;
+  clearTimeout(vssToast._t); if (!sticky) vssToast._t = setTimeout(() => { t.hidden = true; }, 9000);
+}
+async function startRecording(stream) {
+  if (DEMO || mrec || !window.MediaRecorder) return;
+  try {
+    const r = await fetch(`${BASE}/api/vss-limits`);
+    const mb = (await r.json()).max_mb;
+    if (mb) mMaxBytes = Math.floor(mb * 0.85 * 1024 * 1024);
+  } catch {}
+  try {
+    const mime = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
+    mrec = new MediaRecorder(stream, { ...(mime ? { mimeType: mime } : {}), videoBitsPerSecond: 800000 });
+    mrec.ondataavailable = (e) => {
+      if (!e.data.size) return;
+      mChunks.push(e.data); mBytes += e.data.size;
+      // dropping mid-stream chunks would corrupt the webm, so stop at the cap instead
+      if (mChunks.length >= REC_MAX_MS / 1000 || mBytes >= mMaxBytes) { try { mrec.stop(); } catch {} $("btnVss").classList.remove("is-rec"); }
+    };
+    mrec.start(1000);
+    $("btnVss").classList.add("is-rec");
+  } catch (e) { console.warn("recorder", e); mrec = null; }
+}
+function sessionBlob() { return new Blob(mChunks, { type: "video/webm" }); }
+async function sendSession(beacon = false) {
+  if (uploading) return;
+  if (DEMO) {
+    uploading = true; vssToast("Uploading session to VAST VSS…", false, true);
+    return setTimeout(() => { uploading = false; vssToast("Indexed in VAST VSS: current-live/DEMO42/session.webm"); }, 1400);
+  }
+  if (!mChunks.length) return vssToast("Nothing recorded yet. Start the camera first.", true);
+  const blob = sessionBlob(), url = `${BASE}/api/session/${sessionCode}/upload`;
+  if (beacon) { navigator.sendBeacon?.(url, blob); return; }
+  uploading = true; vssToast(`Uploading ${(blob.size / 1e6).toFixed(1)} MB to VAST VSS…`, false, true);
+  try {
+    const fd = new FormData(); fd.append("file", blob, "session.webm");
+    const r = await fetch(url, { method: "POST", body: fd });
+    const j = await r.json();
+    vssToast(j.ok ? `Indexed in VAST VSS: ${j.object_key || "ok"}` : `VSS upload failed: ${j.detail || j.status}`, !j.ok);
+  } catch (e) { vssToast("VSS upload failed: network", true); }
+  uploading = false;
+}
+$("btnVss").onclick = () => sendSession();
+let autoSent = false;
+addEventListener("pagehide", () => { if (!autoSent && !DEMO && !uploading && mBytes > 50000) { autoSent = true; sendSession(true); } });
