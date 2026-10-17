@@ -88,6 +88,8 @@ def _touch(sess, step_changed: bool = False) -> None:
     c = sess.coach
     c["last_act_ts"] = now
     if step_changed:
+        c["awaiting_next"] = False
+        c["ready_votes"] = {"ver": None, "n": 0, "idx": c.get("step_index", 0)}
         c["step_ts"] = now
         c["hint_level"] = 0
         c["last_hint_ts"] = 0.0
@@ -176,6 +178,7 @@ def public_coach_state(sess) -> dict:
         "projects": list_projects(),
         "board": c.get("board", "nano"),
         "mistakes": public_mistakes(_diag(sess)),
+        "awaiting_next": bool(sess.coach.get("awaiting_next")),
         "confidence": _confidence(sess),
     }
 
@@ -466,7 +469,8 @@ async def converse(sess, http: aiohttp.ClientSession, question: str) -> dict:
             "coach": public_coach_state(sess),
         }
 
-    if any(w in low for w in ("next", "done", "finished", "continue", "got it", "ready")):
+    yes = sess.coach.get("awaiting_next") and low.strip(" .!") in ("yes", "yeah", "yep", "sure", "ok", "okay", "go", "go on", "yes please")
+    if yes or any(w in low for w in ("next", "done", "finished", "continue", "got it", "ready")):
         st = advance_step(sess, 1)
         tip = await teach_current_step(sess, http, force=True)
         text = tip["text"] if tip else f"On to step {st['step_index'] + 1}."
@@ -663,14 +667,27 @@ async def on_twin_update(sess, http: aiohttp.ClientSession) -> dict | None:
         return await teach_current_step(sess, http, force=False)
     suggested = infer_step_from_twin(project, sess.twin)
     idx = sess.coach["step_index"]
-    if suggested > idx and suggested <= idx + 1:
-        done = step_at(project, idx)
-        sess.coach["step_index"] = suggested
-        sess.coach["last_tip_key"] = None
-        _touch(sess, True)
-        cel = _celebrate(sess, done)
-        tip = await teach_current_step(sess, http, force=False)
-        if tip:
-            cel["text"] = cel["text"] + " Next: " + tip["text"]
-        return cel
+    if suggested > idx and not sess.coach.get("awaiting_next"):
+        # Looks done. Two consecutive twins must agree, then ASK before moving on (never auto-advance on one noisy frame).
+        ver = getattr(sess, "last_cosmos_ts", 0)
+        rv = sess.coach.setdefault("ready_votes", {"ver": None, "n": 0, "idx": idx})
+        if rv["idx"] != idx:
+            rv.update(ver=None, n=0, idx=idx)
+        if rv["ver"] != ver:
+            rv["ver"] = ver
+            rv["n"] += 1
+        if rv["n"] >= 2:
+            done = step_at(project, idx)
+            sess.coach["awaiting_next"] = True
+            _touch(sess)
+            cel = _celebrate(sess, done)
+            cel["text"] = (cel["text"].split(" " + (done.get("check") or "\0"))[0]
+                           + ' Ready for the next step? Say "next" or tap Continue.')
+            sess.coach["pending_check"] = None  # confirmation, not a quiz, is what we wait for
+            cel["step_ready"] = True
+            cel["coach"] = public_coach_state(sess)
+            return cel
+        return None
+    if sess.coach.get("awaiting_next"):
+        return None  # waiting for the user to confirm; don't talk over them
     return await teach_current_step(sess, http, force=False)

@@ -127,12 +127,18 @@ class CoachTests(unittest.TestCase):
         s = sess()
         coach.start_project(s, "blink")
         s.twin = tw([("nano", "arduino")], [])
+        s.last_cosmos_ts = 1.0
+        self.assertIsNone(run(coach.on_twin_update(s, None)))  # one twin is not enough
+        s.last_cosmos_ts = 2.0
         out = run(coach.on_twin_update(s, None))
-        self.assertIn("Next:", out["text"])
-        self.assertIsNotNone(s.coach["pending_check"])
-        r = run(coach.converse(s, None, "the long one is the anode"))
-        self.assertIsNone(s.coach["pending_check"])
-        self.assertTrue(r["text"])
+        self.assertTrue(out["step_ready"])
+        self.assertIn("Ready for the next step", out["text"])
+        self.assertEqual(s.coach["step_index"], 0)  # asked, did not auto-advance
+        self.assertTrue(s.coach["awaiting_next"])
+        yes = run(coach.converse(s, None, "yes"))
+        self.assertEqual(s.coach["step_index"], 1)
+        self.assertFalse(s.coach["awaiting_next"])
+        self.assertTrue(yes["text"])
 
 
 if __name__ == "__main__":
