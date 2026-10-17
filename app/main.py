@@ -22,6 +22,7 @@ from coach import (
 )
 from config import settings
 from history import cross_corpus_demo
+from sponsors import vast_store, vss_upload
 from perception.worker import run_worker
 from session import store
 from verifier.engine import verify_twin
@@ -288,6 +289,44 @@ async def api_replay(_: web.Request) -> web.Response:
     return web.json_response(json.loads(REPLAY.read_text()))
 
 
+async def api_upload(request: web.Request) -> web.Response:
+    code = request.match_info["code"].upper()
+    sess = store.get(code)
+    if sess is None:
+        raise web.HTTPNotFound(text="unknown session")
+    http: aiohttp.ClientSession = request.app["http"]
+    data, filename = b"", "session.webm"
+    if request.content_type.startswith("multipart/"):
+        reader = await request.multipart()
+        async for part in reader:
+            if part.name == "file":
+                filename = part.filename or filename
+                data = bytes(await part.read(decode=False))
+    else:
+        data = await request.read()
+        if "mp4" in request.content_type:
+            filename = "session.mp4"
+    if not data:
+        return web.json_response({"ok": False, "status": "empty", "detail": "no video data", "object_key": None}, status=400)
+    filename = f"current-{sess.code}-{filename.rsplit('/', 1)[-1]}"
+    res = await vss_upload.upload_session_video(http, data, filename, sess)
+    try:  # best-effort copy to VAST S3
+        if settings.s3_ready:
+            from sponsors.vast_store import _key, _put
+            key = _key(sess, "video", "mp4" if filename.endswith(".mp4") else "webm")
+            await asyncio.get_running_loop().run_in_executor(None, _put, key, data, "video/webm")
+            res["s3_key"] = key
+    except Exception as e:  # noqa: BLE001
+        res["s3_error"] = type(e).__name__
+    res.pop("response", None)
+    await sess.broadcast({"type": "vss_upload", "ok": res["ok"], "object_key": res.get("object_key"), "detail": res.get("detail", "")})
+    return web.json_response(res)
+
+
+async def api_upload_limits(request: web.Request) -> web.Response:
+    return web.json_response({"max_mb": await vss_upload.max_upload_mb(request.app["http"]) if settings.vss_ready else 0})
+
+
 async def index(_: web.Request) -> web.Response:
     return web.FileResponse(UI_ROOT / "index.html")
 
@@ -305,7 +344,7 @@ async def on_stop(app: web.Application) -> None:
 
 
 def create_app() -> web.Application:
-    app = web.Application(client_max_size=8 * 1024 * 1024)
+    app = web.Application(client_max_size=64 * 1024 * 1024)
     app.router.add_get("/health", health)
     app.router.add_post("/api/session", create_session)
     app.router.add_get("/ws", ws_handler)
@@ -314,6 +353,8 @@ def create_app() -> web.Application:
     app.router.add_get("/api/cross-corpus", api_cross_corpus)
     app.router.add_get("/api/replay", api_replay)
     app.router.add_get("/api/sponsors", api_sponsors)
+    app.router.add_post("/api/session/{code}/upload", api_upload)
+    app.router.add_get("/api/vss-limits", api_upload_limits)
     app.router.add_get("/", index)
     # CURRENT frontend assets at /app.js /styles.css (relative to index)
     if UI_ROOT.exists():
