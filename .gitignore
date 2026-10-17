@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+probe/results.json
+probe/synthetic_6s.mp4
+probe/breadboard_6s.mp4
+*.tgz

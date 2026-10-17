@@ -1,0 +1,88 @@
+{
+  "events": [
+    {
+      "dt_ms": 500,
+      "type": "twin",
+      "twin": {
+        "components": [
+          {"id": "bat", "type": "battery", "value": "5"},
+          {"id": "d1", "type": "led", "value": "red"}
+        ],
+        "nets": [["bat.pos", "d1.a"], ["d1.k", "bat.neg"]],
+        "supply_voltage": 5
+      },
+      "findings": [
+        {
+          "id": "led_no_series_resistor",
+          "severity": "critical",
+          "rule": "LED_NO_SERIES_R",
+          "message": "LED d1 has no series resistor.",
+          "evidence": {"led": "d1"}
+        }
+      ],
+      "verification": {
+        "badge": "simulation-verified",
+        "z3": {"proved": false, "counterexample_v": 5.0, "badge": "simulation-verified"}
+      },
+      "timing": {"capture_ms": 40, "yolo_ms": 120, "cosmos_ms": 1800, "verify_ms": 12, "speak_ms": 0}
+    },
+    {
+      "dt_ms": 1200,
+      "type": "guidance",
+      "text": "Add a series resistor before powering the LED.",
+      "finding_ids": ["led_no_series_resistor"]
+    },
+    {
+      "dt_ms": 2500,
+      "type": "twin",
+      "twin": {
+        "components": [
+          {"id": "bat", "type": "battery", "value": "5"},
+          {"id": "r1", "type": "resistor", "value": "220"},
+          {"id": "d1", "type": "led", "value": "red"}
+        ],
+        "nets": [["bat.pos", "r1.a"], ["r1.b", "d1.a"], ["d1.k", "bat.neg"]],
+        "supply_voltage": 5
+      },
+      "findings": [],
+      "verification": {
+        "badge": "simulation-verified",
+        "z3": {"proved": false, "counterexample_v": 12.0, "badge": "simulation-verified", "detail": "sat"}
+      },
+      "timing": {"capture_ms": 40, "yolo_ms": 110, "cosmos_ms": 2100, "verify_ms": 15, "speak_ms": 0}
+    },
+    {
+      "dt_ms": 800,
+      "type": "guidance",
+      "text": "Nice — that hazard looks fixed. Continue the next connection.",
+      "finding_ids": ["step_complete"]
+    },
+    {
+      "dt_ms": 1500,
+      "type": "twin",
+      "twin": {
+        "components": [
+          {"id": "bat", "type": "battery", "value": "5"},
+          {"id": "r1", "type": "resistor", "value": "100"},
+          {"id": "d1", "type": "led", "value": "red"}
+        ],
+        "nets": [["bat.pos", "r1.a"], ["r1.b", "d1.a"], ["d1.k", "bat.neg"]],
+        "supply_voltage": 5
+      },
+      "findings": [
+        {
+          "id": "led_overcurrent",
+          "severity": "critical",
+          "rule": "LED_CURRENT_GT_20MA",
+          "message": "LED d1 current may exceed 20 mA at higher supply.",
+          "evidence": {"led": "d1"}
+        }
+      ],
+      "verification": {
+        "badge": "simulation-verified",
+        "z3": {"proved": false, "counterexample_v": 12.0, "available": true}
+      },
+      "timing": {"capture_ms": 35, "yolo_ms": 90, "cosmos_ms": 1900, "verify_ms": 14, "speak_ms": 0, "degraded": false}
+    }
+  ]
+}
