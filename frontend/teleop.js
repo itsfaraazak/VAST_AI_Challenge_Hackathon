@@ -28,8 +28,11 @@ function help() {
   d.hidden = false; clearTimeout(help.t); help.t = setTimeout(() => (d.hidden = true), 4500);
 }
 
+const HOLD_MS = 25000;
 function send(n, kind) {
-  const cur = window.__current; if (!cur) return;
+  const real = window.__current; if (!real) return;
+  window.__teleopHold = kind === "clear" ? 0 : Date.now() + HOLD_MS;   // app.js ignores backend coach/guidance meanwhile
+  const cur = { ...real, onBackend: (m) => real.onBackend({ ...m, __teleop: true }) };
   const base = cur.getCoach?.() || {};
   const steps = (base.steps && base.steps.length === 5) ? base.steps : STEPS.map((s) => ({ title: s.title, action: s.action, why: s.why }));
   const project = base.project || { id: "blink", title: "Blink — external LED on Arduino Nano", steps };
