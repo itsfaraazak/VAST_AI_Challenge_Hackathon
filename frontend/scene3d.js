@@ -509,7 +509,7 @@ function syncLive(S, an, L, board) {
     e.tgt.copy(slot); e.aTgt = 1; e.seen = tick; e.kindTag = kind; e.id = id;
     const lit = !!(tw && tw.led_lit === true); e.lit = lit; e.ledHex = hex;
     if (info.status !== "ok") {
-      const hx = info.status === "bad" ? C.red : C.amber, ctr = slot.clone().add(new V3(e.center.x, e.center.y, e.center.z));
+      const hx = C.amber, ctr = slot.clone().add(new V3(e.center.x, e.center.y, e.center.z));
       const h = new THREE.Mesh(new THREE.SphereGeometry(kind === "led" ? 1.8 : 2.3, 16, 12), new THREE.MeshBasicMaterial({ color: hx, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
       h.position.copy(ctr); R.gLabels.add(h); R.halos.push(h);
       const sp = sprite("! " + (info.msg || "Check this part"), hx); sp.position.set(ctr.x, ctr.y + 3.2, ctr.z); R.gLabels.add(sp);
@@ -613,7 +613,7 @@ function rebuildDynamic() {
   }
   /* findings without a part: label at pin / above board */
   an.loose.slice(0, 3).forEach((l, i) => {
-    const hex = l.sev === "bad" ? C.red : C.amber, p = l.pins.map((x) => resolvePin(board, x)).find(Boolean);
+    const hex = C.amber, p = l.pins.map((x) => resolvePin(board, x)).find(Boolean);
     const s = sprite("! " + l.message, hex); const base = p ? p.pos : new V3(0, 0, -9);
     s.position.set(base.x, base.y + 3.5 + (p ? 0 : i * 2.2), base.z); R.gLabels.add(s);
   });
@@ -628,7 +628,7 @@ function updateHud(steps, idx, an) {
   if (!R.hud) return;
   const parts = Object.values(an.parts), bad = parts.filter((p) => p.status === "bad").length + an.loose.filter((l) => l.sev === "bad").length;
   const st = steps[idx] ? `STEP ${idx + 1}/${steps.length}${steps[idx].title ? " · " + steps[idx].title : ""}` : "BLINK · TARGET";
-  const state = !H.S.twin ? "NO TWIN" : an.complete ? "CIRCUIT COMPLETE" : bad ? bad + " ERROR" + (bad > 1 ? "S" : "") : an.stepOk ? "STEP OK" : "BUILDING";
+  const state = !H.S.twin ? "NO TWIN" : an.complete ? "CIRCUIT COMPLETE" : bad ? "CHECK " + bad + " POSSIBLE ISSUE" + (bad > 1 ? "S" : "") : an.stepOk ? "STEP OK" : "BUILDING";
   const col = an.complete || an.stepOk ? "#3dff8f" : bad ? "#ff2d55" : "#19e3ff";
   R.hud.innerHTML = `<div style="color:#19e3ff">◇ TARGET (ghost) &nbsp; <span style="color:#d8f4ff">◆ OBSERVED (solid)</span></div><div style="opacity:.85">${st.replace(/</g, "&lt;")}</div><div style="color:${col}">${state}</div>`;
 }
@@ -712,11 +712,11 @@ function loop() {
     const dtl = Math.min(0.1, now - (R.prevT || now)); R.prevT = now;
     updateLive(dtl, now); updateFix(now);
     R.pulsers.forEach((p) => { const o = p.base * (p.cur ? 0.6 + 0.4 * Math.sin(now * 3 + p.ph) : 0.45); p.mats.forEach((m) => (m.opacity = o)); });
-    R.halos.forEach((h, i) => { const s = 1 + 0.22 * Math.sin(now * 5 + i); h.scale.setScalar(s); h.material.opacity = 0.25 + 0.15 * Math.sin(now * 5 + i); });
+    R.halos.forEach((h, i) => { const s = 1 + 0.22 * Math.sin(now * 5 + i); h.scale.setScalar(1); h.material.opacity = 0.22; });
     const pm = R.pinMeshes;
     for (const n in pm) {
       const m = pm[n].material, bad = R.badPins.has(n), act = R.activePins.has(n);
-      if (bad) { m.emissive.setHex(C.red); m.emissiveIntensity = 1 + Math.sin(now * 8); }
+      if (bad) { m.emissive.setHex(C.amber); m.emissiveIntensity = 0.6; }
       else if (act) { m.emissive.setHex(C.cyan); m.emissiveIntensity = 0.9 + 0.9 * Math.sin(now * 4); }
       else m.emissiveIntensity = 0;
     }

@@ -10,18 +10,7 @@ const STEPS = [
   { id: "gnd", title: "Close the circuit to GND", why: "Current needs a return path to complete the loop.", action: "Jumper LED cathode row to GND.", pins: ["GND"] },
   { id: "flash", title: "Run Blink", why: "Pin 13 toggles HIGH/LOW every second.", action: "Upload File > Examples > Basics > Blink.", pins: ["D13"] },
 ];
-const TL_STEPS = [
-  { id: "red", title: "Wire the red LED", action: "Red LED to D10 through 220 ohms.", why: "Each LED needs its own current-limiting resistor.", hole_hint: "Rows 10-12, column E", check: "What happens if two LEDs share one resistor?" },
-  { id: "yellow", title: "Wire the yellow LED", action: "Yellow LED to D11 through 220 ohms.", why: "Same circuit, different pin.", hole_hint: "Rows 15-17" },
-  { id: "green", title: "Wire the green LED", action: "Green LED to D12 through 220 ohms.", why: "Three outputs, one shared ground.", hole_hint: "Rows 20-22" },
-  { id: "code", title: "Run the sequence", action: "Upload the traffic light sketch.", why: "Timing comes from delay() between pin writes." },
-];
-const TL = { id: "traffic", title: "Traffic light - 3 LEDs", steps: TL_STEPS };
-const MEM = [
-  { key: "traffic", title: "Traffic light - 3 LEDs", board: "nano", step_index: 2, steps_total: 4, updated: Date.now() / 1000 - 3600, parts_seen: ["led", "resistor"], pct: 50 },
-  { key: "blink", title: "Blink - external LED", board: "nano", step_index: 5, steps_total: 5, updated: Date.now() / 1000 - 86400, parts_seen: ["led", "resistor"], pct: 100 },
-];
-const PROJECT = { id: "blink", title: "Blink — external LED", pitch: "Blink an LED safely.", steps: STEPS };
+const PROJECT = { id: "blink", title: "Blink — external LED", pitch: "Blink an LED safely." };
 const coachState = (i, extra = {}) => ({
   phase: "teaching", project_id: "blink", project: PROJECT, board, step_index: i, step_total: STEPS.length,
   step: STEPS[i], steps: STEPS, mistakes: [], projects: [], ...extra,
@@ -64,7 +53,6 @@ async function script(my) {
   stage = 0; bad = false;
   app.setBoardUi(board);
   app.onBackend({ type: "joined", code: "DEMO42", role: "laptop", coach: { phase: "ask_project", step_index: 0, step_total: 0, projects: [{ id: "blink", title: "Blink — external LED", pitch: "" }] } });
-  app.onBackend({ type: "projects", items: MEM });
   say("Hi! I'm watching your bench. What do you want to build today?", "curriculum");
   await sleep(3500); if (!alive()) return;
   const name = board === "nano" ? "Nano" : "ESP32";
@@ -77,7 +65,7 @@ async function script(my) {
   stage = 1; bad = true;                                     // LED placed backwards
   await perceive("LED inserted, long leg toward GND row"); if (!alive()) return;
   app.onBackend({ type: "coach", ...coachState(1, { mistakes: [MISTAKE] }) });
-  say("Stop. Your LED is backwards. The long leg is the anode and must face the resistor side. Flip it around.", "verifier");
+  say("This LED may be backwards. The long leg is the anode and should face the resistor side.", "verifier");
   await sleep(7500); if (!alive()) return;
 
   bad = false;                                               // child fixes it
@@ -102,7 +90,6 @@ window.CurrentReplay = {
   restart: start,
   onClient(m) {
     if (m.type === "coach_start") { board = m.board || board; start(board); }
-    if (m.type === "resume_project") { run++; const i = 2; app.onBackend({ type: "coach", phase: "teaching", project_id: "traffic", project: TL, board, step_index: i, step_total: 4, step: TL_STEPS[i], steps: TL_STEPS, mistakes: [] }); say("Welcome back. Your red and yellow LEDs are saved. Next, wire the green LED to D12 through 220 ohms.", "curriculum"); }
     if (m.type === "ask" && m.text !== "next") { app.onBackend({ type: "transcript", text: m.text, asr: "canary", ms: 200 }); setTimeout(() => say("The resistor limits current to about 15 milliamps, so the LED and the pin both survive."), 900); }
   },
 };
