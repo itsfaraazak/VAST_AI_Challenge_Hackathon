@@ -48,7 +48,10 @@ function push() {
     : sc === "nognd" ? [{ id: "f3", severity: "warn", message: "No path to GND", parts: [], pins: ["GND"] }] : [];
   CurrentScene.update({ board, project, stepIndex: +document.getElementById("step").value, twin: twin(sc), findings });
 }
+const q = new URLSearchParams(location.hash.slice(1));
+if (q.get("b")) board = q.get("b"); if (q.get("sc")) document.getElementById("sc").value = q.get("sc"); if (q.get("step")) document.getElementById("step").value = q.get("step");
 CurrentScene.mount(document.getElementById("host"));
+CurrentScene.setBoard(board);
 push();
 document.querySelectorAll("[data-b]").forEach((b) => b.onclick = () => { board = b.dataset.b; document.querySelectorAll("[data-b]").forEach((x) => x.classList.toggle("on", x === b)); CurrentScene.setBoard(board); push(); });
 document.getElementById("step").onchange = push; document.getElementById("sc").onchange = push;
