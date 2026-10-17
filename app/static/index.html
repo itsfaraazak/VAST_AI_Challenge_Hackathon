@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0c1210" />
+  <title>Live Twin Coach</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;700&family=IBM+Plex+Mono:wght@400;600&family=Syne:wght@700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="static/styles.css?v=3" />
+</head>
+<body>
+  <header class="row">
+    <div>
+      <h1>Live Twin</h1>
+      <div class="muted">Verified electronics coach · one camera, one screen</div>
+    </div>
+    <div class="row">
+      <span id="modeBadge" class="badge">idle</span>
+      <span id="degradedBadge" class="badge degraded hidden">degraded</span>
+      <span id="verifyBadge" class="badge sim">—</span>
+    </div>
+  </header>
+
+  <section class="panel" style="margin-top:1rem;border:0;padding-top:0">
+    <div class="row">
+      <button id="btnStartCam">Start Continuity Camera</button>
+      <button id="btnDemo" class="ghost">Play breadboard demo video</button>
+      <button id="btnMute" class="ghost">Mute</button>
+      <span class="muted" id="statusLine">idle</span>
+    </div>
+  </section>
+
+  <div class="laptop-grid" style="margin-top:1rem">
+    <div>
+      <video id="video" playsinline muted autoplay></video>
+      <div id="caption">Waiting for guidance…</div>
+      <div class="budget"><span id="budgetFill"></span></div>
+      <svg id="graph" viewBox="0 0 640 280"></svg>
+    </div>
+    <div>
+      <div class="panel" style="margin-top:0;border:0;padding-top:0">
+        <h2>Verifier</h2>
+        <div id="findings" class="muted">No findings yet</div>
+        <div id="z3Box" class="muted"></div>
+      </div>
+      <div class="panel">
+        <h2>Pipeline</h2>
+        <div class="bars" id="bars"></div>
+        <pre class="log" id="pipeLog"></pre>
+      </div>
+      <div class="panel">
+        <h2>Guidance log</h2>
+        <div class="log" id="guidanceLog"></div>
+      </div>
+      <div class="panel">
+        <h2>Twin JSON</h2>
+        <pre class="log" id="twinOut"></pre>
+      </div>
+    </div>
+  </div>
+
+  <script src="static/app.js?v=3"></script>
+</body>
+</html>
