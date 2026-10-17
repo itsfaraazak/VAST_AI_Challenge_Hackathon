@@ -96,3 +96,7 @@ body.phone .stage{grid-template-columns:minmax(0,1fr)}body.phone .coach{grid-tem
 body.phone .coach__line{font-size:18px;min-height:3em}body.phone .mic{width:92px;height:92px}
 @media (max-width:900px){.stage{grid-template-columns:1fr;grid-template-rows:200px 1fr}.coach{grid-template-columns:1fr;grid-template-areas:"line" "form"}.coach__who{display:none}}
 .feed__demo{object-fit:fill}
+
+.vss-toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:50;max-width:min(560px,92vw);padding:10px 16px;border-radius:12px;background:rgba(5,8,12,.92);border:1px solid #c8ff3d;color:#e8f0e0;font:600 13px "IBM Plex Mono",monospace}
+.vss-toast.bad{border-color:#ff3b57}
+.btn.is-rec::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:#ff3b57;margin-right:6px}
