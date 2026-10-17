@@ -49,3 +49,12 @@ Live status of each: `GET /api/sponsors` (`app/sponsors/registry.py`). Details: 
 ## Stack
 
 aiohttp + WebSocket (one small server, no build step), three.js for the twin, MNA/Z3 verifier in plain Python, boto3 for S3. No vendored dependencies; the bundle is under 1 MiB.
+
+## Merged from teammate branch `integration`
+
+Credit to the `integration` branch (FastAPI polling app) for: the VSS "learn from past builds"
+few-shot idea (ported as `app/history.py::grounding_examples`, used in the coach's step tip
+prompt, traced as a `sponsor=vast` span, fails soft) and the camera picker that prefers
+Desk View / Continuity Camera (ported as `frontend/camera.js`, `CurrentCamera.populate(select, onPick)`).
+Its caption-regex `rules.py` checks (no resistor, 5V-GND short, rewiring with USB, wrong pin) are
+already covered by the twin-based detectors in `app/mistakes.py`, so they were not duplicated.

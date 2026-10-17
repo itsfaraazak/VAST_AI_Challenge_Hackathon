@@ -86,6 +86,13 @@ def run(c):
     return asyncio.new_event_loop().run_until_complete(c)
 
 
+class GroundingTests(unittest.TestCase):
+    def test_fail_soft_without_vss(self):
+        import asyncio
+        from history import grounding_examples
+        self.assertEqual(asyncio.run(grounding_examples(None, "Blink", "LED")), [])
+
+
 class CoachTests(unittest.TestCase):
     def test_boards(self):
         self.assertEqual(get_project("blink")["steps"][0]["pins"][0], "D13")
