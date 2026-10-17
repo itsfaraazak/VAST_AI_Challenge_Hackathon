@@ -336,6 +336,12 @@ def validate_project(raw: dict, board: str, prompt: str = "") -> dict:
             "hole_hint": t("hole_hint"), "expect": exp, "pins": pins, "wires": wires,
             "parts": [str(x)[:24] for x in (s.get("parts") or []) if isinstance(x, (str, int))][:8],
         })
+    seen_w: list = []
+    for s in steps:  # wires are cumulative: a later step without wires keeps what was wired before
+        if s["wires"]:
+            seen_w = s["wires"]
+        elif seen_w:
+            s["wires"] = list(seen_w)
     if len({s["id"] for s in steps}) != len(steps):
         for i, s in enumerate(steps):
             s["id"] = f"{s['id']}-{i + 1}"
