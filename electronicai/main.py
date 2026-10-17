@@ -30,6 +30,8 @@ from typing import Any, Dict, List, Optional
 import requests
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
+import simulator
+
 # --------------------------------------------------------------------------- #
 # Configuration — everything from the environment the challenge VM provides.
 # --------------------------------------------------------------------------- #
@@ -225,10 +227,12 @@ EVIDENCE DISCIPLINE — the user can see your sources, so do not bluff:
 (electronics theory) and from the USER'S REPORTED readings.
 - Never claim you measured a component, saw a fault, or confirmed a diagnosis when no \
 evidence supports it.
-- You have a `search_video` tool over an indexed video archive. IMPORTANT: that archive \
-contains traffic / driving / warehouse footage, NOT electronics-repair demonstrations. \
-Use it when a user explicitly asks you to find video, and report honestly if nothing \
-relevant exists — do not pretend a clip shows electronics.
+- You have a `search_video` tool over an indexed video archive. Team footage may include \
+electronics-bench / Arduino Nano clips as well as traffic and warehouse scenes. Use it \
+when the user asks for video evidence, and report honestly what the clips show.
+- You have a `simulate_circuit` tool — a connectivity world-model for Arduino Nano Blink \
+(Wokwi diagram + resistor/GND/D13 checks). Use it for "will this work", "what should I \
+wire next", or wiring-safety questions. Never invent probe readings the sim did not check.
 
 DIAGNOSTIC WORKFLOW — follow it and show your reasoning:
 1. Collect device, symptoms, and context; ask for what is missing.
@@ -247,13 +251,44 @@ UNCERTAINTY: ...
 NEXT SAFE TEST: ...
 """
 
+
+SIMULATE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "simulate_circuit",
+        "description": (
+            "Run the electrical connectivity world-model for an Arduino Nano Blink "
+            "build. Checks series resistor, D13 signal, and GND return; returns "
+            "issues, next_actions, advice, and Wokwi diagram/sketch files."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "Circuit goal. Default arduino_nano_blink.",
+                },
+                "question": {
+                    "type": "string",
+                    "description": "User question about wiring or will-it-work.",
+                },
+                "circuit": {
+                    "type": "object",
+                    "description": "Optional circuit note: components[] and connections[].",
+                },
+            },
+            "required": [],
+        },
+    },
+}
+
 SEARCH_TOOL = {
     "type": "function",
     "function": {
         "name": "search_video",
         "description": (
             "Search the indexed video archive for moments matching a natural-language "
-            "query. The archive is traffic/driving/warehouse footage, not electronics. "
+            "query. May include electronics-bench / Arduino clips as well as traffic/warehouse. "
             "Returns real clips with timestamps, scores, and model descriptions."
         ),
         "parameters": {
@@ -305,36 +340,59 @@ def run_agent(user_message: str, history: List[Dict]) -> Dict:
 
     evidence: List[Dict] = []
     notes: List[str] = []
+    sim_advice = None
 
-    first = llm.chat(messages, tools=[SEARCH_TOOL])
+    first = llm.chat(messages, tools=[SEARCH_TOOL, SIMULATE_TOOL])
     choice = first["choices"][0]["message"]
     tool_calls = choice.get("tool_calls") or []
 
     if tool_calls:
         messages.append(choice)
+        sim_advice = None
         for call in tool_calls:
-            if call["function"]["name"] != "search_video":
-                continue
+            name = call["function"]["name"]
             try:
                 args = json.loads(call["function"]["arguments"] or "{}")
             except json.JSONDecodeError:
                 args = {}
-            query = args.get("query", user_message)
-            try:
-                result = vss.search(query)
-                evidence = _format_evidence(result)
-                tool_payload = {
-                    "found": len(evidence),
-                    "note": (
-                        "Archive is traffic/driving/warehouse footage. "
-                        "If these clips are not about electronics, say so."
-                    ),
-                    "clips": evidence,
-                    "llm_synthesis": (result.get("llm_synthesis") or {}).get("response"),
-                }
-            except VSSError as exc:
-                notes.append(f"Video search unavailable: {exc}")
-                tool_payload = {"error": str(exc), "found": 0, "clips": []}
+            if name == "search_video":
+                query = args.get("query", user_message)
+                try:
+                    result = vss.search(query)
+                    evidence = _format_evidence(result)
+                    tool_payload = {
+                        "found": len(evidence),
+                        "note": (
+                            "Clips may be traffic or electronics-bench. "
+                            "Describe honestly what they show."
+                        ),
+                        "clips": evidence,
+                        "llm_synthesis": (result.get("llm_synthesis") or {}).get("response"),
+                    }
+                except VSSError as exc:
+                    notes.append(f"Video search unavailable: {exc}")
+                    tool_payload = {"error": str(exc), "found": 0, "clips": []}
+            elif name == "simulate_circuit":
+                try:
+                    sim_result = simulator.advise(
+                        circuit_note=args.get("circuit"),
+                        goal=args.get("goal") or "arduino_nano_blink",
+                        question=args.get("question") or user_message,
+                    )
+                    sim_advice = sim_result.get("advice")
+                    tool_payload = {
+                        "ok": sim_result.get("ok"),
+                        "advice": sim_result.get("advice"),
+                        "issues": sim_result.get("issues"),
+                        "next_actions": sim_result.get("next_actions"),
+                        "netlist": sim_result.get("netlist"),
+                    }
+                    notes.append(f"Sim: {sim_advice}")
+                except Exception as exc:  # noqa: BLE001 — surface to the agent
+                    notes.append(f"Simulation unavailable: {exc}")
+                    tool_payload = {"error": str(exc), "ok": False}
+            else:
+                tool_payload = {"error": f"unknown tool {name}"}
             messages.append({
                 "role": "tool",
                 "tool_call_id": call["id"],
@@ -345,7 +403,7 @@ def run_agent(user_message: str, history: List[Dict]) -> Dict:
     else:
         answer = choice.get("content", "")
 
-    return {"answer": answer, "evidence": evidence, "notes": notes}
+    return {"answer": answer, "evidence": evidence, "notes": notes, "sim_advice": sim_advice}
 
 
 # --------------------------------------------------------------------------- #
@@ -371,9 +429,9 @@ def status() -> Response:
         "llm_configured": llm.configured,
         "llm_model": WANDB_MODEL if llm.configured else None,
         "corpus_note": (
-            "Indexed corpus is traffic/driving/warehouse footage — not electronics "
-            "repair. Video evidence is used honestly; electronics reasoning is model "
-            "knowledge, clearly separated."
+            "Index includes electronics-bench / Arduino clips plus traffic/warehouse. "
+            "Video evidence is used honestly; simulate_circuit checks Blink wiring; "
+            "electronics theory is labelled separately from observed clips."
         ),
     })
 
