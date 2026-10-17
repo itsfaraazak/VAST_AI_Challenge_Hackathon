@@ -117,13 +117,7 @@ const nodeKey = (s) => {
   if (k === "+5V" || k === "VBUS") k = "5V";
   return k;
 };
-const kindOf = (c) => {
-  const s = (String(c && c.type) + " " + String(c && c.id)).toLowerCase();
-  if (/led/.test(s)) return "led";
-  if (/res|ohm/.test(s)) return "resistor";
-  if (/wire|jump/.test(s)) return "wire";
-  return "other";
-};
+const kindOf = (c) => { const k = partKindOf(c && c.type) || partKindOf(c && c.id); return k || "other"; };
 const matches = (fid, c) => {
   const f = norm(fid), id = norm(c.id), ty = norm(c.type);
   return f === id || f === ty || (f === "LED" && kindOf(c) === "led") || (/^RES/.test(f) && kindOf(c) === "resistor") || (f === "R" + (c.value || "") && kindOf(c) === "resistor");
@@ -131,7 +125,7 @@ const matches = (fid, c) => {
 
 /* ---------- electrical analysis (client-side, mirrors verifier intent) ---------- */
 function analyze(st) {
-  const out = { parts: {}, complete: false, stepOk: false, badPins: new Set(), loose: [], uf: null };
+  const out = { hints: {}, parts: {}, complete: false, stepOk: false, badPins: new Set(), loose: [], uf: null };
   const tw = st.twin;
   if (!tw || !Array.isArray(tw.components)) return out;
   const comps = tw.components.filter((c) => c && c.id != null);
@@ -153,6 +147,7 @@ function analyze(st) {
   };
   comps.forEach((c) => mark(c, "ok", ""));
   const hasNets = nets.length > 0;
+  const markN = (c, st, msg) => { (out.hints[c.id] = out.hints[c.id] || []).push(msg); };
   const rs = comps.filter((c) => kindOf(c) === "resistor"), ls = comps.filter((c) => kindOf(c) === "led");
   const rRoots = (r) => terms(r).map(rootOf);
   const allR = new Set(); rs.forEach((r) => rRoots(r).forEach((x) => x && allR.add(x)));
@@ -162,8 +157,8 @@ function analyze(st) {
       const roots = rRoots(r);
       const mem = [].concat(...roots.map((x) => (x ? members(x) : []))).filter(isPinNode);
       const wrong = mem.find((p) => p !== sig && p !== "GND");
-      if (wrong) mark(r, "bad", `Resistor on ${wrong}; it belongs on ${sig}`);
-      else if (!roots.includes(sigR) || !sigR) mark(r, "bad", `Resistor is not connected to ${sig}`);
+      if (wrong) markN(r, "bad", `Resistor on ${wrong}; it belongs on ${sig}`);
+      else if (!roots.includes(sigR) || !sigR) markN(r, "bad", `Resistor is not connected to ${sig}`);
       else goodR = goodR || r;
     });
     ls.forEach((l) => {
@@ -171,10 +166,10 @@ function analyze(st) {
       const a = ts.find((k) => slotOf(l.id, k.split(".")[1], "led") === "a"), k = ts.find((x) => slotOf(l.id, x.split(".")[1], "led") === "k");
       const aR = a && rootOf(a), kR = k && rootOf(k);
       if ((kR && allR.has(kR) && kR !== gndR) || (aR && gndR && aR === gndR)) {
-        mark(l, "bad", "LED is reversed: long leg (anode) toward the resistor, short leg to GND", { flip: true });
-      } else if (!kR || !gndR || kR !== gndR) mark(l, "bad", "LED cathode (short leg) is not connected to GND");
-      else if (rs.length && (!aR || !allR.has(aR))) mark(l, "warn", "LED anode is not connected to the resistor");
-      else if (!rs.length) mark(l, "warn", "LED has no series resistor");
+        markN(l, "bad", "LED is reversed: long leg (anode) toward the resistor, short leg to GND", { flip: true });
+      } else if (!kR || !gndR || kR !== gndR) markN(l, "bad", "LED cathode (short leg) is not connected to GND");
+      else if (rs.length && (!aR || !allR.has(aR))) markN(l, "warn", "LED anode is not connected to the resistor");
+      else if (!rs.length) markN(l, "warn", "LED has no series resistor");
       else goodL = goodL || { l, aR };
     });
     if (goodR && goodL) {
@@ -182,8 +177,9 @@ function analyze(st) {
       out.complete = !!(other && other === goodL.aR && out.parts[goodL.l.id].status === "ok" && out.parts[goodR.id].status === "ok");
     }
   }
+  out.complete = !!(tw.led_lit === true);
   /* findings override / augment */
-  arr(st.findings).forEach((f) => {
+  arr(st.findings).concat(arr(st.mistakes).map((m) => (typeof m === "string" ? { severity: "error", message: m } : m && typeof m === "object" ? Object.assign({ severity: "error", message: m.message || m.title || m.id || "Mistake" }, m, { severity: m.severity === "warn" ? "warn" : "error" }) : null))).forEach((f) => {
     if (!f || (f.severity !== "error" && f.severity !== "warn")) return;
     const sev = f.severity === "error" ? "bad" : "warn";
     let hit = false;
@@ -214,7 +210,7 @@ function stepTags(steps, idx) {
 }
 
 /* ---------- renderer state ---------- */
-const H = { host: null, ready: false, loading: null, S: { board: "nano", project: null, stepIndex: 0, twin: null, findings: [] }, sig: "", boardKey: "", flashT: -9, flashKind: "ok" };
+const H = { host: null, ready: false, loading: null, S: { board: "nano", project: null, stepIndex: 0, twin: null, findings: [], mistakes: [], eff: null }, twinRef: null, twinJson: "", twinAt: 0, age0: 0, hadFix: false, sig: "", boardKey: "", flashT: -9, flashKind: "ok" };
 let R = null; // render context
 
 function safe(fn, tag) { try { return fn(); } catch (e) { console.error("[scene3d]" + (tag ? " " + tag : ""), e); } }
@@ -341,13 +337,13 @@ function buildLED(mode, hex, a, k, flip, pulsers) {
   g.userData.dome = dome.material; g.userData.center = new V3(mid.x, 2.2, mid.z);
   return g;
 }
-function buildResistor(mode, hex, a, b, pulsers) {
+function buildResistor(mode, hex, a, b, pulsers, val) {
   const g = new THREE.Group(), ghost = mode === "ghost", mats = [];
   const M = (h, e) => { const m = ghost ? gMat(hex, 0.6) : sMat(h, e); if (ghost) mats.push(m); return m; };
   const mid = a.clone().add(b).multiplyScalar(0.5), d = b.clone().sub(a).setY(0).normalize();
   const body = new THREE.Group(); body.position.set(mid.x, 1.3, mid.z); body.quaternion.setFromUnitVectors(new V3(0, 1, 0), d);
   body.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.38, 1.6, 4, 12), M(0xd9b98a, 0.15)));
-  if (!ghost) [[-0.55, 0xe02020], [-0.2, 0xe02020], [0.15, 0x7a3b10], [0.6, 0xd4af37]].forEach(([y, c]) => { const r = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.12, 12), sMat(c, 0.2)); r.position.y = y; body.add(r); });
+  if (!ghost) (() => { const bd = resBands(val); return [[-0.55, bd[0]], [-0.2, bd[1]], [0.15, bd[2]], [0.6, 0xd4af37]]; })().forEach(([y, c]) => { const r = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.12, 12), sMat(c, 0.2)); r.position.y = y; body.add(r); });
   g.add(body);
   const up = (p, y) => new V3(p.x, y, p.z);
   const pts = [up(a, -0.5), up(a, 1.0), up(mid, 1.3).addScaledVector(d, -1.1), up(mid, 1.3).addScaledVector(d, 1.1), up(b, 1.0), up(b, -0.5)];
@@ -369,122 +365,251 @@ function buildWire(mode, hex, from, to, pulsers) {
   return g;
 }
 
+/* ---------- generic part model (local coords: terminal 'first' at origin) ---------- */
+const TERM = {
+  resistor: { a: [0, 0], b: [4, 0] }, led: { a: [0, 0], k: [1, 0] },
+  button: { a: [0, 0], b: [2, 0], c: [0, 2], d: [2, 2] }, buzzer: { pos: [0, 0], neg: [2, 0] },
+  pot: { p1: [0, 0], wiper: [1.5, 0], p3: [3, 0] }, ic: { t0: [0, 0], t1: [1, 0], t2: [2, 0], t3: [3, 0] },
+  wire: { a: [0, 0], b: [1.5, 2.8] },
+};
+const hashN = (s) => { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h; };
+function termOf(kind, t) {
+  t = String(t || "").toLowerCase(); const T = TERM[kind] || TERM.ic;
+  if (T[t]) return t;
+  const keys = Object.keys(T);
+  if (kind === "led") return /^(a|anode|\+|pos|long|1)/.test(t) ? "a" : "k";
+  if (kind === "resistor" || kind === "wire") return /^(a|1|p1|in|from)$/.test(t) ? "a" : "b";
+  if (kind === "buzzer") return /^(pos|\+|a|1|plus|p|vcc|sig)/.test(t) ? "pos" : "neg";
+  if (kind === "pot") return /wiper|^w$|out|sig|mid|^2$|^b$/.test(t) ? "wiper" : /^(1|a|vcc|top|hi|p1)/.test(t) ? "p1" : "p3";
+  return keys[hashN(t) % keys.length];
+}
+function termLocal(kind, t) { const T = TERM[kind] || TERM.ic, o = T[termOf(kind, t)] || [0, 0]; return new V3(o[0], 0, o[1]); }
+function partKindOf(s) {
+  s = String(s == null ? "" : s).toLowerCase().trim();
+  if (!s) return null;
+  if (/breadboard|bread board/.test(s)) return "breadboard";
+  if (/esp|arduino|nano|uno|mega|devkit|microcontroller/.test(s)) return "board";
+  if (/led|diode/.test(s) || /^l\d+$/.test(s)) return "led";
+  if (/buzz|speaker|piezo/.test(s)) return "buzzer";
+  if (/btn|button|switch|^sw\d*$|push/.test(s)) return "button";
+  if (/pot|trimmer|^vr\d|^rv\d|rheostat/.test(s)) return "pot";
+  if (/res|ohm|^r\d+$/.test(s)) return "resistor";
+  if (/wire|jump|cable/.test(s)) return "wire";
+  if (/\bic\b|chip|sensor|^u\d|servo|motor|display|lcd|oled|relay|module|transistor|^q\d/.test(s)) return "ic";
+  return null;
+}
+const LEDCOL = { red: 0xff3030, green: 0x30ff60, blue: 0x3a7bff, yellow: 0xffe03a, white: 0xf4f8ff, orange: 0xff8a1f, amber: 0xffb21e, purple: 0xb060ff, pink: 0xff70c0 };
+const BAND = [0x111111, 0x7a3b10, 0xe02020, 0xff8a1f, 0xffe03a, 0x31d46b, 0x2f7bff, 0xa855f7, 0x9aa5b1, 0xf4f4f4];
+function resBands(val) {
+  const m = /^\s*([\d.]+)\s*([kKmM]?)/.exec(String(val == null ? "220" : val));
+  if (!m) return [0xe02020, 0xe02020, 0x7a3b10];
+  let v = parseFloat(m[1]) * ({ k: 1e3, m: 1e6 }[m[2].toLowerCase()] || 1);
+  if (!(v >= 1)) return [0xe02020, 0xe02020, 0x7a3b10];
+  let e = 0; while (v >= 100 && e < 9) { v /= 10; e++; }
+  while (v < 10 && v > 0 && e > -2) { v *= 10; e--; }
+  const r = Math.round(v);
+  return [BAND[Math.floor(r / 10) % 10], BAND[r % 10], e >= 0 ? BAND[e] : (e === -1 ? 0xd4af37 : 0xc0c0c0)];
+}
+function boxy(mode, hex, w, h, d, cx, cy, cz, pulsers, kids) {
+  const g = new THREE.Group(), ghost = mode === "ghost", mats = [];
+  const M = (c, e) => { const m = ghost ? gMat(hex, 0.6) : sMat(c, e); if (ghost) mats.push(m); return m; };
+  const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), M(hex, 0.15)); b.position.set(cx, cy, cz); g.add(b);
+  if (kids) kids(g, M);
+  if (ghost && pulsers) track(pulsers.list, mats, 0.6, pulsers.cur);
+  g.userData.center = new V3(cx, cy + 1.2, cz); return g;
+}
+function buildPart(kind, mode, hex, o, pulsers) {
+  o = o || {};
+  if (kind === "resistor") return buildResistor(mode, hex, new V3(0, 0, 0), new V3(4, 0, 0), pulsers, o.val);
+  if (kind === "led") return buildLED(mode, hex, new V3(0, 0, 0), new V3(1, 0, 0), false, pulsers);
+  if (kind === "wire") return buildWire(mode, hex, new V3(0, 0, 0), new V3(1.5, 0, 2.8), pulsers);
+  const col = mode === "ghost" ? C.cyan : 0x9fb4c8;
+  if (kind === "button") return boxy(mode, col, 2.4, 0.9, 2.4, 1, 0.9, 1, pulsers, (g, M) => { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 0.5, 16), M(0xff4060, 0.3)); c.position.set(1, 1.5, 1); g.add(c); });
+  if (kind === "buzzer") return boxy(mode, 0x202830, 0.01, 0.01, 0.01, 1, 0.5, 0, pulsers, (g, M) => { const c = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 1.3, 20), M(mode === "ghost" ? C.cyan : 0x23303c, 0.2)); c.position.set(1, 1.0, 0); g.add(c); const h = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.1, 10), M(0x000000, 0)); h.position.set(1, 1.7, 0); g.add(h); });
+  if (kind === "pot") return boxy(mode, 0x1f5fb0, 3.6, 1.0, 2.2, 1.5, 0.9, 0, pulsers, (g, M) => { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 0.9, 14), M(0xd0d8e0, 0.15)); c.position.set(1.5, 1.7, 0); g.add(c); });
+  return boxy(mode, 0x1a1f26, 3.6, 0.9, 1.8, 1.5, 0.8, 0.5, pulsers);
+}
+function ghostParts(steps, idx, L) {
+  const map = new Map(), generic = new Set();
+  const skip = (k) => !k || k === "wire" || k === "board" || k === "breadboard";
+  steps.slice(0, idx + 1).forEach((s) => {
+    arr(s.parts).forEach((p) => {
+      const q = String(p == null ? "" : p).trim(), m = /^([A-Za-z]+\d+)\b/.exec(q), k = partKindOf(m ? m[1] : q) || partKindOf(q);
+      if (skip(k)) return; if (m && partKindOf(m[1])) map.set(m[1].toUpperCase(), { kind: k }); else generic.add(k);
+    });
+    arr(s.wires).forEach((w) => [w && w.from, w && w.to].forEach((e) => {
+      const m = /^([A-Za-z]+\d+)[._](\w+)$/.exec(String(e == null ? "" : e)); if (!m) return;
+      const k = partKindOf(m[1]) || "ic"; if (!skip(k) && !isPinNode(norm(m[1]))) map.set(m[1].toUpperCase(), { kind: k });
+    }));
+  });
+  generic.forEach((k) => { if (![...map.values()].some((v) => v.kind === k)) map.set(k.toUpperCase() + "1", { kind: k }); });
+  const cnt = {}; let gi = 0;
+  map.forEach((p) => { const n = cnt[p.kind] = (cnt[p.kind] === undefined ? 0 : cnt[p.kind] + 1); p.slot = slotFor(p.kind, n, gi, L); if (p.kind !== "resistor" && p.kind !== "led") gi++; });
+  return map;
+}
+function slotFor(kind, n, m, L) {
+  if (kind === "resistor") return n === 0 ? L.r.a.clone() : holePos(3 + (6 * (n - 1)) % 22, "A");
+  if (kind === "led") return n === 0 ? L.led.a.clone() : holePos(4 + (3 * (n - 1)) % 24, "G");
+  if (kind === "wire") return holePos(3 + (2 * n) % 25, "J");
+  return holePos(4 + (5 * m) % 22, "I");
+}
+
 /* ---------- dynamic build ---------- */
-function endpointPos(raw, L, board) {
+function endpointPos(raw, L, board, gp) {
   const s = String(raw == null ? "" : raw), h = parseHole(s);
   if (h) return holePos(h.col, h.row);
   const u = norm(s);
   if (/^(GND_?RAIL|RAIL|BB[_-]?GND|-RAIL|RAIL-)$/.test(u)) return L.rail.clone();
-  let m = /^(LED\w*|L\d*)[._](\w+)$/.exec(u);
-  if (m) return (slotOf("", m[2], "led") === "a" ? L.led.a : L.led.k).clone();
-  m = /^(R\w*)[._](\w+)$/.exec(u);
-  if (m) return (slotOf("", m[2], "res") === "a" ? L.r.a : L.r.b).clone();
+  const m = /^([A-Z]+\d*)[._](\w+)$/.exec(u);
+  if (m && gp && gp.has(m[1])) { const p = gp.get(m[1]); return p.slot.clone().add(termLocal(p.kind, m[2])); }
   const p = resolvePin(board, s);
   return p ? p.pos : null;
 }
 function wireColor(c, d) { return WIRE_COL[String(c || "").toLowerCase()] || d; }
+const effBoard = () => (BOARDS[H.S.eff] ? H.S.eff : BOARDS[H.S.board] ? H.S.board : "nano");
+function twinBoard(tw) {
+  if (!tw || tw.scene === "other") return null;
+  for (const c of arr(tw.components)) {
+    if (!c || typeof c !== "object") continue;
+    const s = (String(c.type) + " " + String(c.id)).toLowerCase();
+    if (/esp/.test(s)) return "esp32"; if (/arduino|nano|uno/.test(s)) return "nano";
+  }
+  return null;
+}
+function prep(g) {
+  g.traverse((o) => { if (!o.material) return; (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { if (m.userData.o0 === undefined) { m.userData.o0 = m.opacity; m.transparent = true; } }); });
+}
+function disposeObj(w) { if (w.parent) w.parent.remove(w); w.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { if (m.map && !m.map.userData.keep) m.map.dispose(); m.dispose(); }); }); }
+
+function syncLive(S, an, L, board) {
+  const tw = S.twin, tick = (R.tick = (R.tick || 0) + 1), comps = tw && Array.isArray(tw.components) ? tw.components : [];
+  const placeOf = (id) => { const p = arr(tw && tw.placements).find((x) => x && typeof x === "object" && norm(x.id) === norm(id)); return p ? parseHole(p.hole) : null; };
+  const cnt = {}; let gi = 0, wi = 0;
+  const seenKeys = new Set();
+  comps.forEach((c, i) => {
+    if (!c || typeof c !== "object") return;
+    const kind = kindOf(c); if (kind === "board" || kind === "breadboard") return;
+    const id = c.id != null ? String(c.id) : kind + "#" + i; let key = norm(id); if (seenKeys.has(key)) key += "#" + i; seenKeys.add(key);
+    const n = cnt[kind] = (cnt[kind] === undefined ? 0 : cnt[kind] + 1);
+    const info = an.parts[c.id] || { status: "ok" };
+    let slot = kind === "wire" ? slotFor("wire", wi++, 0, L) : slotFor(kind, n, gi, L);
+    if (kind !== "resistor" && kind !== "led" && kind !== "wire") gi++;
+    const ph = placeOf(id);
+    if (ph && (kind === "resistor" ? ph.col <= 26 : kind === "led" ? ph.col <= 29 : false)) slot = holePos(ph.col, ph.row);
+    const val = c.value != null ? String(c.value) : "";
+    const hex = kind === "led" ? (LEDCOL[String(c.color || val).toLowerCase()] || 0xff3030) : kind === "wire" ? wireColor(c.color || val, 0xff8a1f) : 0x9fb4c8;
+    const sig = [kind, hex, val, info.status].join("|");
+    let e = R.live.get(key);
+    if (!e || e.sig !== sig) {
+      const g = buildPart(kind, "solid", hex, { val }, null); prep(g);
+      const w = new THREE.Group(); w.add(g); R.gObs.add(w);
+      if (e) { disposeObj(e.w); e.w = w; } else { e = { w, cur: slot.clone(), tgt: slot.clone(), alpha: 0, aTgt: 1 }; R.live.set(key, e); }
+      e.w = w; e.sig = sig; e.kind = kind; e.dome = g.userData.dome || null; e.center = g.userData.center;
+    }
+    e.tgt.copy(slot); e.aTgt = 1; e.seen = tick; e.kindTag = kind; e.id = id;
+    const lit = !!(tw && tw.led_lit === true); e.lit = lit; e.ledHex = hex;
+    if (info.status !== "ok") {
+      const hx = info.status === "bad" ? C.red : C.amber, ctr = slot.clone().add(new V3(e.center.x, e.center.y, e.center.z));
+      const h = new THREE.Mesh(new THREE.SphereGeometry(kind === "led" ? 1.8 : 2.3, 16, 12), new THREE.MeshBasicMaterial({ color: hx, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
+      h.position.copy(ctr); R.gLabels.add(h); R.halos.push(h);
+      const sp = sprite("! " + (info.msg || "Check this part"), hx); sp.position.set(ctr.x, ctr.y + 3.2, ctr.z); R.gLabels.add(sp);
+    }
+  });
+  R.live.forEach((e) => { if (e.seen !== tick) e.aTgt = 0; });
+  /* unverified nets as thin dashed cyan hints */
+  const legs = (name) => {
+    const u = norm(name), m = /^(.+?)\.(.+)$/.exec(u);
+    if (m) { for (const [k, e] of R.live) if (k === m[1] || k.startsWith(m[1] + "#")) return e.tgt.clone().add(termLocal(e.kind, m[2])).setY(0.4); return null; }
+    const p = resolvePin(board, name); if (p) return p.pos.clone(); const h = parseHole(name); return h ? holePos(h.col, h.row) : null;
+  };
+  R.hasNets = false;
+  arr(tw && tw.nets).filter(Array.isArray).slice(0, 40).forEach((n) => {
+    const ps = n.map((x) => (typeof x === "string" ? legs(x) : null)).filter(Boolean);
+    for (let i = 1; i < ps.length; i++) {
+      if (ps[i - 1].distanceTo(ps[i]) < 0.05) continue;
+      const a = ps[i - 1].clone().setY(Math.max(ps[i - 1].y, 0.5) + 0.4), b = ps[i].clone().setY(Math.max(ps[i].y, 0.5) + 0.4), mid = a.clone().add(b).multiplyScalar(0.5).setY(a.y + 1.2);
+      const ln = new THREE.Line(new THREE.BufferGeometry().setFromPoints(new THREE.QuadraticBezierCurve3(a, mid, b).getPoints(16)), new THREE.LineDashedMaterial({ color: C.cyan, dashSize: 0.32, gapSize: 0.26, transparent: true, opacity: 0.6 }));
+      ln.computeLineDistances(); R.gNets.add(ln); R.hasNets = true;
+    }
+  });
+}
+function updateLive(dt, now) {
+  const age = twinAge(), other = !!(H.S.twin && H.S.twin.scene === "other"), none = !H.S.twin;
+  const dimT = none || other ? 0 : age > 15 ? 0.3 : 1;
+  R.dim += (dimT - R.dim) * Math.min(1, dt * 5);
+  const k = 1 - Math.exp(-dt * 8), da = dt / 0.4, dead = [];
+  let firstLed = null;
+  R.live.forEach((e, key) => {
+    e.cur.lerp(e.tgt, k); e.w.position.copy(e.cur);
+    e.alpha += Math.sign(e.aTgt - e.alpha) * Math.min(Math.abs(e.aTgt - e.alpha), da);
+    const a = e.alpha * R.dim; e.w.visible = a > 0.01;
+    e.w.traverse((o) => { if (!o.material) return; (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { if (m.userData.o0 !== undefined) m.opacity = m.userData.o0 * a; }); });
+    if (e.alpha <= 0.001 && e.aTgt === 0) dead.push(key);
+    if (e.kind === "led" && e.dome) {
+      const on = e.lit && (Math.sin(now * 6) > -0.4 || true);
+      e.dome.emissive.setHex(e.ledHex); e.dome.emissiveIntensity = e.lit ? 2.2 + 1.2 * Math.sin(now * 5) : 0.2;
+      if (e.lit && !firstLed) firstLed = e;
+    }
+  });
+  dead.forEach((key) => { disposeObj(R.live.get(key).w); R.live.delete(key); });
+  if (firstLed) { R.ledLight.color.setHex(firstLed.ledHex); R.ledLight.intensity = 40 * R.dim; R.ledLight.position.copy(firstLed.cur).add(new V3(0.5, 3, 0)); } else R.ledLight.intensity = 0;
+  R.gLabels.visible = R.dim > 0.5; R.gNets.visible = R.dim > 0.15;
+  R.gNets.children.forEach((l) => (l.material.opacity = 0.6 * R.dim));
+  if (R.liveEl) {
+    const stale = !none && !other && age > 15;
+    R.liveEl.innerHTML = none ? '<span style="color:#7a8a99">NO TWIN YET</span>' : other ? '<span style="color:#ffb21e">&#9679; NO SCENE</span>' : stale ? `<span style="color:#ffb21e">&#9679; STALE &middot; seen ${Math.round(age)} s ago</span>` : `<span style="color:#3dff8f">&#9679; LIVE</span> &middot; seen ${Math.max(0, Math.round(age))} s ago`;
+    if (R.hasNets && !other && !none) R.liveEl.innerHTML += '<br><span style="color:#19e3ff;opacity:.8">- - unverified nets</span>';
+    R.msgEl.style.display = other ? "block" : "none";
+  }
+}
+function twinAge() { return H.S.twin ? (performance.now() - H.twinAt) / 1000 + (H.age0 || 0) : Infinity; }
 
 function rebuildDynamic() {
-  const { S } = H, board = BOARDS[S.board] ? S.board : "nano", B = BOARDS[board];
-  clearGroup(R.gTarget); clearGroup(R.gObs); clearGroup(R.gLabels);
-  R.pulsers = []; R.halos = []; R.activePins = new Set(); R.badPins = new Set(); R.flow = null; R.led = null;
-  const L = defaultLayout(board), an = analyze(S);
+  const { S } = H, board = effBoard(), B = BOARDS[board];
+  clearGroup(R.gTarget); clearGroup(R.gLabels); clearGroup(R.gNets);
+  R.pulsers = []; R.halos = []; R.activePins = new Set(); R.badPins = new Set(); R.flow = null;
+  const L = defaultLayout(board), an = analyze(Object.assign({}, S, { board }));
   R.an = an;
   /* ---- TARGET ---- */
   const steps = arr(S.project && S.project.steps).filter((s) => s && typeof s === "object");
   const idx = steps.length ? clamp(S.stepIndex | 0, 0, steps.length - 1) : 0;
   const defW = { sig: { f: L.sig, t: L.sigHole, c: "orange" }, g1: { f: L.gndHole, t: L.rail, c: "black" }, g2: { f: L.railPin, t: L.gnd, c: "black" } };
-  let wires = [], parts = new Set();
-  if (!steps.length) { wires = [["sig", true], ["g1", true], ["g2", true]]; parts = new Set(["led", "resistor"]); }
+  const wires = [];
+  let gp;
+  if (!steps.length) { wires.push(["sig", true], ["g1", true], ["g2", true]); gp = new Map([["R1", { kind: "resistor", slot: L.r.a.clone() }], ["LED1", { kind: "led", slot: L.led.a.clone() }]]); }
   else {
+    gp = ghostParts(steps, idx, L);
     const seen = new Set();
     steps.slice(0, idx + 1).forEach((s, si) => {
       const cur = si === idx;
-      arr(s.parts).forEach((p) => { const q = String(p).toLowerCase(); if (/led/.test(q)) parts.add("led"); else if (/res|ohm/.test(q)) parts.add("resistor"); });
-      arr(s.wires).forEach((w, wi) => {
+      arr(s.wires).forEach((w) => {
         if (!w) return;
-        const f = endpointPos(w.from, L, board), t = endpointPos(w.to, L, board);
+        const f = endpointPos(w.from, L, board, gp), t = endpointPos(w.to, L, board, gp);
         if (f && t) wires.push([{ f, t, c: w.color }, cur]);
         else {
-          const key = [norm(w.from), norm(w.to)].join();
-          const touchesSig = [w.from, w.to].some((x) => norm(x) === B.sig || norm(x) === "GPIO2" && board === "esp32");
-          const ids = touchesSig ? ["sig"] : ["g1", "g2"];
-          ids.forEach((id) => { if (!seen.has(id)) { seen.add(id); wires.push([id, cur]); } });
+          const touchesSig = [w.from, w.to].some((x) => norm(x) === B.sig || (norm(x) === "GPIO2" && board === "esp32"));
+          (touchesSig ? ["sig"] : ["g1", "g2"]).forEach((id) => { if (!seen.has(id)) { seen.add(id); wires.push([id, cur]); } });
         }
       });
       if (cur) arr(s.pins).forEach((p) => { const r = resolvePin(board, p); if (r) R.activePins.add(r.name); });
     });
   }
   const P = (cur) => ({ list: R.pulsers, cur });
-  wires.forEach(([w, cur]) => {
-    const d = typeof w === "string" ? defW[w] : w;
-    R.gTarget.add(buildWire("ghost", C.cyan, d.f, d.t, P(cur)));
-  });
-  if (parts.has("resistor")) R.gTarget.add(buildResistor("ghost", C.cyan, L.r.a, L.r.b, P(true)));
-  if (parts.has("led")) R.gTarget.add(buildLED("ghost", C.cyan, L.led.a, L.led.k, false, P(true)));
+  wires.forEach(([w, cur]) => { const d = typeof w === "string" ? defW[w] : w; R.gTarget.add(buildWire("ghost", C.cyan, d.f, d.t, P(cur))); });
+  gp.forEach((p) => { const g = buildPart(p.kind, "ghost", C.cyan, {}, P(true)); g.position.copy(p.slot); R.gTarget.add(g); });
   if (!steps.length) R.activePins.add(B.sig), R.activePins.add(B.gnd);
   an.badPins.forEach((p) => { const r = resolvePin(board, p); if (r) R.badPins.add(r.name); });
 
-  /* ---- OBSERVED ---- */
-  const tw = S.twin;
-  if (tw && Array.isArray(tw.components)) {
-    const comps = tw.components.filter((c) => c && c.id != null);
-    const placeOf = (id) => { const p = arr(tw.placements).find((x) => x && norm(x.id) === norm(id)); return p ? parseHole(p.hole) : null; };
-    const legs = {};
-    let ri = 0, li = 0;
-    const statCol = (st, def) => (st === "bad" ? C.red : st === "warn" ? C.amber : def);
-    const labelAt = (pos, msg, hex) => { const s = sprite("! " + msg, hex); s.position.set(pos.x, pos.y + 3.2, pos.z); R.gLabels.add(s); };
-    const halo = (pos, rad, hex) => { const h = new THREE.Mesh(new THREE.SphereGeometry(rad, 16, 12), new THREE.MeshBasicMaterial({ color: hex, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false })); h.position.copy(pos); R.gObs.add(h); R.halos.push(h); };
-    comps.filter((c) => kindOf(c) !== "wire").forEach((c) => {
-      const kind = kindOf(c), info = an.parts[c.id] || { status: "ok" }, ph = placeOf(c.id);
-      const hex = statCol(info.status, C.white);
-      let g;
-      if (kind === "resistor") {
-        const o = ri++ * 0.0, a = ph && ph.col <= 26 ? holePos(ph.col, ph.row) : L.r.a, b = ph && ph.col <= 26 ? holePos(ph.col + 4, ph.row) : L.r.b;
-        g = buildResistor("solid", hex, a.clone().setZ(a.z - o), b.clone().setZ(b.z - o), null);
-        legs[norm(c.id)] = { a, b };
-      } else if (kind === "led") {
-        const o = li++;
-        const a = ph && ph.col <= 29 ? holePos(ph.col, ph.row) : L.led.a, k = ph && ph.col <= 29 ? holePos(ph.col + 1, ph.row) : L.led.k;
-        g = buildLED("solid", info.status === "ok" ? 0x9fe9ff : hex, a, k, !!info.flip, null);
-        legs[norm(c.id)] = info.flip ? { a: k, k: a } : { a, k };
-        if (o === 0) R.led = g.userData.dome;
-      } else return;
-      R.gObs.add(g);
-      if (info.status !== "ok") { halo(g.userData.center, kind === "led" ? 1.8 : 2.3, hex); labelAt(g.userData.center, info.msg || "Check this part", hex); }
-    });
-    /* wires */
-    const nodeIndex = new Map();
-    arr(tw.nets).filter(Array.isArray).forEach((n) => n.forEach((k) => nodeIndex.set(norm(k), n)));
-    const resolveNode = (k) => {
-      const u = norm(k), m = /^(.+?)\.(.+)$/.exec(u);
-      if (m) { const lg = legs[m[1]]; if (lg) { const c = comps.find((x) => norm(x.id) === m[1]); return lg[slotOf(m[1], m[2], kindOf(c))] || null; } return null; }
-      const p = resolvePin(board, k); if (p) return p.pos;
-      const h = parseHole(k); return h ? holePos(h.col, h.row) : null;
-    };
-    const ends = (w) => [...nodeIndex.keys()].length ? ["a", "b", "1", "2"].map((t) => {
-      const net = nodeIndex.get(norm(w.id) + "." + t.toUpperCase()); if (!net) return null;
-      for (const k of net) { if (norm(k).startsWith(norm(w.id) + ".")) continue; const p = resolveNode(k); if (p) return p; }
-      return null;
-    }).filter(Boolean) : [];
-    comps.filter((c) => kindOf(c) === "wire").forEach((w) => {
-      const e = ends(w); if (e.length < 2) return;
-      const info = an.parts[w.id] || { status: "ok" }, hex = info.status === "ok" ? wireColor(w.color, 0xff8a1f) : statCol(info.status);
-      const g = buildWire("solid", hex, e[0], e[1], null); R.gObs.add(g);
-      if (info.status !== "ok") { halo(g.userData.center, 1.6, hex); labelAt(g.userData.center, info.msg || "Check this wire", hex); }
-    });
-    /* flow path when complete */
-    if (an.complete) {
-      const rl = legs[norm((comps.find((c) => kindOf(c) === "resistor" && (an.parts[c.id] || {}).status === "ok") || {}).id)] || { a: L.r.a, b: L.r.b };
-      const ll = legs[norm((comps.find((c) => kindOf(c) === "led") || {}).id)] || { a: L.led.a, k: L.led.k };
-      const up = (p, y) => new V3(p.x, y, p.z);
-      const pts = [L.sig, up(L.sig, 2.5), up(rl.a, 2.0), up(rl.a, 1.0), up(rl.b, 1.2), up(ll.a, 1.0), up(ll.k, 1.0), up(L.gndHole, 1.0), up(L.rail, 1.0), up(L.railPin, 1.0), L.gnd.clone()];
-      const curve = new THREE.CatmullRomCurve3(pts, false, "centripetal");
-      const im = new THREE.InstancedMesh(new THREE.SphereGeometry(0.17, 8, 8), new THREE.MeshBasicMaterial({ color: C.green, blending: THREE.AdditiveBlending, transparent: true, toneMapped: false }), 44);
-      R.gObs.add(im); R.flow = { im, curve };
-      const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 160, 0.05, 5), new THREE.MeshBasicMaterial({ color: C.green, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
-      R.gObs.add(tube);
-    }
+  /* ---- OBSERVED (persistent, tweened) ---- */
+  syncLive(S, an, L, board);
+  if (an.complete) {
+    const f = (kind) => { for (const e of R.live.values()) if (e.kind === kind && e.aTgt === 1) return e.tgt; return null; };
+    const rt = f("resistor") || L.r.a, lt = f("led") || L.led.a, up = (p, y) => new V3(p.x, y, p.z);
+    const pts = [L.sig, up(L.sig, 2.5), up(rt, 2.0), up(rt.clone().add(new V3(4, 0, 0)), 1.2), up(lt, 1.0), up(lt.clone().add(new V3(1, 0, 0)), 1.0), up(L.gndHole, 1.0), up(L.rail, 1.0), up(L.railPin, 1.0), L.gnd.clone()];
+    const curve = new THREE.CatmullRomCurve3(pts, false, "centripetal");
+    const im = new THREE.InstancedMesh(new THREE.SphereGeometry(0.17, 8, 8), new THREE.MeshBasicMaterial({ color: C.green, blending: THREE.AdditiveBlending, transparent: true, toneMapped: false }), 44);
+    R.gLabels.add(im); R.flow = { im, curve };
+    R.gLabels.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 160, 0.05, 5), new THREE.MeshBasicMaterial({ color: C.green, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })));
   }
   /* findings without a part: label at pin / above board */
   an.loose.slice(0, 3).forEach((l, i) => {
@@ -492,9 +617,11 @@ function rebuildDynamic() {
     const s = sprite("! " + l.message, hex); const base = p ? p.pos : new V3(0, 0, -9);
     s.position.set(base.x, base.y + 3.5 + (p ? 0 : i * 2.2), base.z); R.gLabels.add(s);
   });
-  /* step-ok shimmer */
+  const fixes = computeFixes(S, an, L, board, steps, idx, gp);
+  buildFixes(fixes);
+  if (!fixes.length && H.hadFix) flash("ok");
+  H.hadFix = fixes.length > 0;
   R.shimmer.visible = an.stepOk;
-  R.shimmer.material.uniforms.c.value.set(an.complete ? C.green : C.green);
   updateHud(steps, idx, an);
 }
 function updateHud(steps, idx, an) {
@@ -527,18 +654,18 @@ async function init() {
     fragmentShader: "uniform float t; uniform vec3 c; varying vec2 vUv; void main(){float x=fract(vUv.x-t*.3);float b=exp(-pow((x-.5)*9.,2.));float g=step(.95,fract(vUv.x*30.))+step(.9,fract(vUv.y*10.));gl_FragColor=vec4(c,.05+b*.25+g*.07*(.4+b));}",
   }));
   shimmer.rotation.x = -Math.PI / 2; shimmer.position.set(0, 0.12, 0); shimmer.visible = false; scene.add(shimmer);
-  const gStatic = new THREE.Group(), gBoard = new THREE.Group(), gTarget = new THREE.Group(), gObs = new THREE.Group(), gLabels = new THREE.Group();
+  const gStatic = new THREE.Group(), gBoard = new THREE.Group(), gTarget = new THREE.Group(), gObs = new THREE.Group(), gLabels = new THREE.Group(), gNets = new THREE.Group(), gFix = new THREE.Group();
   gStatic.add(buildBreadboard());
-  scene.add(gStatic, gBoard, gTarget, gObs, gLabels);
+  scene.add(gStatic, gBoard, gTarget, gObs, gLabels, gNets, gFix);
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.set(0, 0, 5); controls.enableDamping = true; controls.autoRotate = true; controls.autoRotateSpeed = 0.7; controls.maxPolarAngle = Math.PI * 0.49; controls.minDistance = 12; controls.maxDistance = 90;
-  controls.addEventListener("start", () => { controls.autoRotate = false; });
+  controls.target.set(0, 0, 5); controls.enableDamping = true; controls.autoRotate = false; controls.autoRotateSpeed = 0.8; controls.maxPolarAngle = Math.PI * 0.49; controls.minDistance = 12; controls.maxDistance = 90;
+  controls.addEventListener("start", () => { controls.autoRotate = false; syncTb(); });
   let composer = null, bloom = null;
   if (EffectComposer) safe(() => {
     composer = new EffectComposer(renderer); composer.addPass(new RenderPass(scene, camera));
     bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.8, 0.55, 0.3); composer.addPass(bloom); composer.addPass(new OutputPass());
   }, "bloom");
-  R = { renderer, scene, camera, controls, composer, bloom, gBoard, gTarget, gObs, gLabels, shimmer, grid, ledLight, pulsers: [], halos: [], activePins: new Set(), badPins: new Set(), flow: null, led: null, an: null, clock: new THREE.Clock(), pinMeshes: {}, hud: null, ro: null };
+  R = { renderer, scene, camera, controls, composer, bloom, gBoard, gTarget, gObs, gLabels, gNets, gFix, live: new Map(), dim: 0, fixes: [], shimmer, grid, ledLight, pulsers: [], halos: [], activePins: new Set(), badPins: new Set(), flow: null, led: null, an: null, clock: new THREE.Clock(), pinMeshes: {}, hud: null, ro: null };
   attach();
   H.ready = true;
   applyState(true);
@@ -552,6 +679,12 @@ function attach() {
   if (cv.parentNode !== host) host.appendChild(cv);
   if (!R.hud) { R.hud = document.createElement("div"); R.hud.style.cssText = "position:absolute;left:12px;top:34px;font:11px/1.5 ui-monospace,Menlo,monospace;letter-spacing:.08em;pointer-events:none;text-shadow:0 0 8px #000;z-index:2"; }
   if (R.hud.parentNode !== host) host.appendChild(R.hud);
+  if (!R.liveEl) {
+    R.liveEl = document.createElement("div"); R.liveEl.style.cssText = "position:absolute;right:12px;top:10px;text-align:right;font:11px/1.5 ui-monospace,Menlo,monospace;letter-spacing:.08em;pointer-events:none;color:#9fefff;text-shadow:0 0 8px #000;z-index:2";
+    R.msgEl = document.createElement("div"); R.msgEl.textContent = "NO BOARD IN VIEW"; R.msgEl.style.cssText = "display:none;position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);font:bold 20px ui-monospace,Menlo,monospace;letter-spacing:.2em;color:#ffb21e;text-shadow:0 0 14px #ffb21e;pointer-events:none;z-index:2";
+    R.tb = buildToolbar();
+  }
+  [R.liveEl, R.msgEl, R.tb].forEach((e) => { if (e.parentNode !== host) host.appendChild(e); });
   if (R.ro) R.ro.disconnect();
   const size = () => {
     const w = Math.max(host.clientWidth, 2), h = Math.max(host.clientHeight, 2);
@@ -563,19 +696,21 @@ function attach() {
 function applyState(force) {
   if (!R) return;
   safe(() => {
-    if (force || H.boardKey !== H.S.board) {
-      const key = BOARDS[H.S.board] ? H.S.board : "nano"; H.boardKey = H.S.board;
+    if (force || H.boardKey !== effBoard()) {
+      const key = effBoard(); H.boardKey = key;
       clearGroup(R.gBoard); const b = buildBoard(key); R.gBoard.add(b); R.pinMeshes = b.userData.pinMeshes; H.sig = "";
     }
-    const sig = JSON.stringify([H.S.board, H.S.project, H.S.stepIndex, H.S.twin, H.S.findings]);
+    const sig = JSON.stringify([effBoard(), H.S.project, H.S.stepIndex, H.S.twin, H.S.findings, H.S.mistakes]);
     if (sig !== H.sig) { H.sig = sig; rebuildDynamic(); }
   }, "apply");
 }
 function loop() {
   requestAnimationFrame(loop);
   safe(() => {
-    const now = R.clock.getElapsedTime();
+    const now = performance.now() / 1000;
     R.controls.update();
+    const dtl = Math.min(0.1, now - (R.prevT || now)); R.prevT = now;
+    updateLive(dtl, now); updateFix(now);
     R.pulsers.forEach((p) => { const o = p.base * (p.cur ? 0.6 + 0.4 * Math.sin(now * 3 + p.ph) : 0.45); p.mats.forEach((m) => (m.opacity = o)); });
     R.halos.forEach((h, i) => { const s = 1 + 0.22 * Math.sin(now * 5 + i); h.scale.setScalar(s); h.material.opacity = 0.25 + 0.15 * Math.sin(now * 5 + i); });
     const pm = R.pinMeshes;
@@ -586,10 +721,6 @@ function loop() {
       else m.emissiveIntensity = 0;
     }
     R.shimmer.material.uniforms.t.value = now;
-    const on = R.an && R.an.complete && (now % 1) < 0.5;
-    if (R.led) { R.led.emissive.setHex(R.an.complete ? C.green : 0x9fe9ff); R.led.color.setHex(R.an.complete && on ? 0xbfffd8 : 0x9fe9ff); R.led.emissiveIntensity = R.an.complete ? (on ? 3.5 : 0.15) : 0.2; }
-    R.ledLight.intensity = R.an && R.an.complete && on ? 40 : 0;
-    if (R.led && R.gObs.children.length) { const lg = R.gObs.children.find((c) => c.userData && c.userData.dome === R.led); if (lg) R.ledLight.position.copy(lg.userData.center).setY(3); }
     if (R.flow) {
       const m4 = new THREE.Matrix4(), n = R.flow.im.count;
       for (let i = 0; i < n; i++) { const p = R.flow.curve.getPointAt((i / n + now * 0.22) % 1); m4.makeTranslation(p.x, p.y, p.z); R.flow.im.setMatrixAt(i, m4); }
@@ -602,6 +733,105 @@ function loop() {
     if (R.bloom) R.bloom.strength = 0.8 + f * 1.2;
     if (R.composer) R.composer.render(); else R.renderer.render(R.scene, R.camera);
   }, "frame");
+}
+
+/* ---------- fix-it animation ---------- */
+function computeFixes(S, an, L, board, steps, idx, gp) {
+  const out = [], B = BOARDS[board], pin = (p) => { const r = resolvePin(board, p); return r ? r.pos.clone() : null; };
+  const live = (kind) => { for (const e of R.live.values()) if (e.kind === kind && e.aTgt === 1) return e; return null; };
+  const ms = arr(S.mistakes).map((m) => (typeof m === "string" ? { id: m, message: m } : m)).filter((m) => m && typeof m === "object");
+  arr(S.findings).forEach((f) => { if (f && f.severity === "error") ms.push(f); });
+  const seen = new Set();
+  ms.slice(0, 3).forEach((m) => {
+    const id = String(m.id || "").toLowerCase(), key = id + "|" + arr(m.pins).join(); if (seen.has(key)) return; seen.add(key);
+    const msg = String(m.message || m.title || id || "Fix this");
+    const r = live("resistor"), l = live("led");
+    const sigp = pin(B.sig) || L.sig.clone();
+    if (/led.*(revers|flip|polar)|revers/.test(id + " " + msg.toLowerCase()) && (l || /led/.test(id))) {
+      const p = l ? l.tgt.clone() : L.led.a.clone();
+      out.push({ kind: "flip", at: p.add(new V3(0.5, 0, 0)), to: p.clone(), label: "Flip the LED 180: long leg toward the resistor, short leg to GND" });
+    } else if (/5v|vcc|wrong.?pin|resistor_to/.test(id) || (/resistor/.test(msg.toLowerCase()) && /5v/.test(msg.toLowerCase()))) {
+      const from = pin("5V") || (r ? r.tgt.clone() : L.r.a.clone());
+      out.push({ kind: "move", from, to: sigp, label: "Move the resistor wire from 5V to " + B.sig });
+    } else if (/gnd|ground/.test(id)) {
+      out.push({ kind: "move", from: L.rail.clone(), to: pin("GND") || L.gnd.clone(), label: "Add a wire: GND pin to the ground rail" });
+    } else if (/missing|no_|not_placed/.test(id) && /resistor/.test(id)) {
+      out.push({ kind: "drop", from: L.r.a.clone().add(new V3(0, 6, 0)), to: L.r.a.clone(), label: "Place the resistor here, next to " + B.sig });
+    } else if (/missing|no_/.test(id) && /led/.test(id)) {
+      out.push({ kind: "drop", from: L.led.a.clone().add(new V3(0, 6, 0)), to: L.led.a.clone(), label: "Place the LED here" });
+    } else if (/strip|row|same/.test(id)) {
+      const a = r ? r.tgt.clone() : L.r.a.clone();
+      out.push({ kind: "move", from: a.clone().add(new V3(0, 0, -2)), to: L.sigHole.clone(), label: "Move this part into the same strip as " + B.sig });
+    } else {
+      const p = arr(m.pins).map(pin).find(Boolean) || sigp;
+      out.push({ kind: "move", from: p.clone().add(new V3(0, 5, 0)), to: p, label: msg });
+    }
+  });
+  /* missing target wire for the current step */
+  if (!out.length && S.twin && S.twin.scene !== "other" && !arr(S.twin.components).some((c) => c && kindOf(c) === "wire") && !arr(S.twin.nets).length) {
+    const st = steps[idx], w = st && arr(st.wires)[0];
+    if (w) { const f = endpointPos(w.from, L, board, gp), t = endpointPos(w.to, L, board, gp); if (f && t) out.push({ kind: "move", from: f, to: t, label: "Add this wire: " + w.from + " -> " + w.to }); }
+  }
+  return out;
+}
+function buildFixes(list) {
+  clearGroup(R.gFix); R.fixes = [];
+  list.forEach((f) => {
+    const g = new THREE.Group(), hex = C.mag;
+    const dest = f.to, src = f.from || f.at;
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.15, 32), new THREE.MeshBasicMaterial({ color: hex, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthTest: false, blending: THREE.AdditiveBlending }));
+    ring.rotation.x = -Math.PI / 2; ring.position.set(dest.x, 0.2, dest.z); ring.renderOrder = 15; g.add(ring);
+    let curve = null, cone = null;
+    const cm = new THREE.MeshBasicMaterial({ color: hex, depthTest: false, transparent: true, toneMapped: false });
+    if (f.kind === "flip") {
+      cone = new THREE.Mesh(new THREE.ConeGeometry(0.4, 1, 10), cm); cone.renderOrder = 16; g.add(cone);
+      const arc = new THREE.Mesh(new THREE.TorusGeometry(1.9, 0.06, 6, 40), new THREE.MeshBasicMaterial({ color: hex, transparent: true, opacity: 0.6, depthTest: false })); arc.position.set(dest.x, 1.8, dest.z); arc.rotation.x = Math.PI / 2; g.add(arc);
+    } else {
+      const a = src.clone().setY(Math.max(src.y, 0.4) + 0.5), b = dest.clone().setY(1.0), mid = a.clone().add(b).multiplyScalar(0.5); mid.y += 2.5 + a.distanceTo(b) * 0.15;
+      curve = new THREE.QuadraticBezierCurve3(a, mid, b);
+      const ln = new THREE.Line(new THREE.BufferGeometry().setFromPoints(curve.getPoints(40)), new THREE.LineDashedMaterial({ color: hex, dashSize: 0.45, gapSize: 0.3, transparent: true, opacity: 0.85, depthTest: false })); ln.computeLineDistances(); ln.renderOrder = 15; g.add(ln);
+      cone = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.1, 10), cm); cone.renderOrder = 16; g.add(cone);
+    }
+    const sp = sprite(f.label, hex); const lp = curve ? curve.getPoint(0.5) : dest; sp.position.set(lp.x, lp.y + 3.4, lp.z); g.add(sp);
+    R.gFix.add(g); R.fixes.push({ f, curve, cone, ring, dest });
+  });
+}
+function updateFix(now) {
+  if (!R.fixes) return;
+  R.fixes.forEach((x, i) => {
+    const t = (now * 0.45 + i * 0.3) % 1, p = 1 + 0.35 * Math.sin(now * 5);
+    x.ring.scale.setScalar(p); x.ring.material.opacity = 0.5 + 0.4 * Math.sin(now * 5);
+    if (x.curve) {
+      const pt = x.curve.getPoint(t), tg = x.curve.getTangent(t);
+      x.cone.position.copy(pt); x.cone.quaternion.setFromUnitVectors(new V3(0, 1, 0), tg);
+    } else {
+      const a = t * Math.PI * 2; x.cone.position.set(x.dest.x + Math.cos(a) * 1.9, 1.8, x.dest.z + Math.sin(a) * 1.9);
+      x.cone.quaternion.setFromUnitVectors(new V3(0, 1, 0), new V3(-Math.sin(a), 0, Math.cos(a)));
+      x.f.at && 0;
+    }
+  });
+}
+
+/* ---------- toolbar / view controls ---------- */
+const VIEWS = { top: [0, 46, 0.01], front: [0, 7, 40], iso: [0, 24, 38] };
+function setAutoRotate(on) { safe(() => { if (R) { R.controls.autoRotate = !!on; syncTb(); } }, "autorotate"); }
+function setView(v) {
+  safe(() => {
+    if (!R || !VIEWS[v]) return; const p = VIEWS[v];
+    R.camera.position.set(p[0], p[1], p[2]); R.controls.target.set(0, 0, v === "top" ? 3 : 4); R.controls.autoRotate = false; R.controls.update(); syncTb();
+  }, "view");
+}
+function syncTb() { if (R && R.tbPlay) { R.tbPlay.textContent = R.controls.autoRotate ? "Pause" : "Spin"; R.tbPlay.classList.toggle("on", R.controls.autoRotate); } }
+function buildToolbar() {
+  const d = document.createElement("div");
+  d.style.cssText = "position:absolute;left:12px;bottom:12px;display:flex;gap:4px;align-items:center;z-index:3;font:11px ui-monospace,Menlo,monospace;background:rgba(3,8,16,.7);border:1px solid #0e4a60;padding:4px 6px;border-radius:6px";
+  const btn = (t, fn) => { const b = document.createElement("button"); b.textContent = t; b.style.cssText = "background:#06182a;color:#9fefff;border:1px solid #19e3ff55;border-radius:4px;padding:3px 8px;font:inherit;cursor:pointer"; b.onclick = fn; d.appendChild(b); return b; };
+  R.tbPlay = btn("Spin", () => setAutoRotate(!R.controls.autoRotate));
+  const sl = document.createElement("input"); sl.type = "range"; sl.min = "0.2"; sl.max = "4"; sl.step = "0.1"; sl.value = "0.8"; sl.style.width = "70px"; sl.title = "rotation speed";
+  sl.oninput = () => { R.controls.autoRotateSpeed = +sl.value; }; d.appendChild(sl);
+  btn("Top", () => setView("top")); btn("Front", () => setView("front")); btn("Iso", () => setView("iso"));
+  btn("Reset", () => { setView("iso"); R.controls.target.set(0, 0, 5); R.controls.update(); sl.value = "0.8"; R.controls.autoRotateSpeed = 0.8; });
+  return d;
 }
 
 /* ---------- public API ---------- */
@@ -621,14 +851,19 @@ function update(state) {
     s.project = state.project && typeof state.project === "object" ? state.project : null;
     s.stepIndex = Number.isFinite(+state.stepIndex) ? +state.stepIndex : 0;
     s.twin = state.twin && typeof state.twin === "object" ? state.twin : null;
-    s.findings = arr(state.findings);
+    s.findings = arr(state.findings); s.mistakes = arr(state.mistakes);
+    let js = ""; try { js = JSON.stringify(s.twin); } catch (e) {}
+    if (Number.isFinite(+state.twinAgeS) && state.twinAgeS !== null) { H.twinAt = performance.now(); H.age0 = +state.twinAgeS; }
+    else if (s.twin !== H.twinRef || js !== H.twinJson) { H.twinAt = performance.now(); H.age0 = 0; }
+    H.twinRef = s.twin; H.twinJson = js;
+    s.eff = twinBoard(s.twin);
     applyState(false);
   }, "update");
 }
-function setBoard(b) { safe(() => { if (BOARDS[b]) { H.S.board = b; applyState(false); } }, "setBoard"); }
-function flash(kind) { safe(() => { H.flashKind = kind === "error" ? "error" : "ok"; H.flashT = R ? R.clock.getElapsedTime() : -9; }, "flash"); }
+function setBoard(b) { safe(() => { if (BOARDS[b]) { H.S.board = b; H.S.eff = twinBoard(H.S.twin); applyState(false); } }, "setBoard"); }
+function flash(kind) { safe(() => { H.flashKind = kind === "error" ? "error" : "ok"; H.flashT = R ? performance.now() / 1000 : -9; }, "flash"); }
 
-export const CurrentScene = { mount, update, setBoard, flash };
-export { mount, update, setBoard, flash };
+export const CurrentScene = { mount, update, setBoard, flash, setAutoRotate, setView };
+export { mount, update, setBoard, flash, setAutoRotate, setView };
 export default CurrentScene;
 if (typeof window !== "undefined") window.CurrentScene = CurrentScene;
