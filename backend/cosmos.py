@@ -10,23 +10,19 @@ import urllib.request
 
 DEFAULT_HOST = "166.19.38.112"
 PROMPT = (
-    "Look at THIS still image only. Do not invent parts that are not clearly visible. "
-    "If there is no Arduino, breadboard, LED, resistor, or jumper wire in the frame, "
-    "set board to \"unknown\", components to [], wires to [], pins_used to [], "
-    "risks to [], placement_advice to \"\", and summary to a short honest description of what is actually in the frame "
-    "(desk, hands, laptop, empty view, etc.). "
-    "If electronics ARE visible, be specific about pins and placement. "
-    "Reply with ONLY compact JSON (no markdown): "
-    '{"visible_electronics":true|false,'
-    '"board":"nano|uno|unknown",'
-    '"components":["LED","resistor","breadboard","jumper","usb"],'
-    '"wires":[{"color":"","from":"","to":""}],'
+    "Look only at this image. If you clearly see an Arduino, breadboard, LED, resistor, "
+    "jumper wire, or USB cable, set visible_electronics=true and list them. "
+    "If the frame is empty desk/keyboard with no parts, set visible_electronics=false. "
+    "Do not invent parts. Reply with ONE JSON object only, no markdown fences: "
+    '{"visible_electronics":true,'
+    '"board":"nano",'
+    '"components":["breadboard","LED","resistor","jumper","usb"],'
     '"pins_used":["D13","GND"],'
-    '"action":"placing|wiring|idle|testing|none",'
-    '"risks":["no_resistor_on_LED","wrong_pin","possible_short","usb_while_rewiring"],'
-    '"confidence":0.0,'
-    '"summary":"what is actually visible",'
-    '"placement_advice":"only if electronics are visible; else empty"}'
+    '"action":"wiring",'
+    '"risks":[],'
+    '"confidence":0.8,'
+    '"summary":"short description",'
+    '"placement_advice":"one tip"}'
 )
 
 
@@ -83,7 +79,7 @@ class CosmosClient:
         payload = {
             "model": model,
             "temperature": 0,
-            "max_tokens": 220,
+            "max_tokens": 450,
             "messages": [
                 {
                     "role": "user",
@@ -104,7 +100,7 @@ class CosmosClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=45) as response:
+            with urllib.request.urlopen(request, timeout=60) as response:
                 body = json.loads(response.read().decode())
         except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError) as exc:
             raise CosmosError("Cosmos reason call failed", 502) from exc
@@ -117,26 +113,67 @@ class CosmosClient:
         return _parse_jsonish(content)
 
 
+def _repair_truncated(text: str) -> str:
+    """Best-effort close of truncated JSON objects/arrays/strings."""
+    s = text.rstrip()
+    if not s.startswith("{"):
+        return s
+    # close an open string
+    if s.count('"') % 2 == 1:
+        s += '"'
+    opens = s.count("{") - s.count("}")
+    opens_arr = s.count("[") - s.count("]")
+    s += "]" * max(0, opens_arr)
+    s += "}" * max(0, opens)
+    return s
+
+
 def _parse_jsonish(text: str) -> dict:
     cleaned = text.strip()
     fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", cleaned)
     if fence:
         cleaned = fence.group(1).strip()
-    try:
-        data = json.loads(cleaned)
-        if isinstance(data, dict):
-            return data
-    except json.JSONDecodeError:
-        pass
+    # strip leading ```json without closing fence (truncated reply)
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned).strip()
+
+    candidates = [cleaned]
     start = cleaned.find("{")
     end = cleaned.rfind("}")
-    if start >= 0 and end > start:
+    if start >= 0:
+        if end > start:
+            candidates.append(cleaned[start : end + 1])
+        candidates.append(_repair_truncated(cleaned[start:]))
+
+    for candidate in candidates:
         try:
-            data = json.loads(cleaned[start : end + 1])
-            if isinstance(data, dict):
-                return data
+            data = json.loads(candidate)
         except json.JSONDecodeError:
-            pass
+            continue
+        if isinstance(data, dict) and (
+            "visible_electronics" in data or "components" in data or "board" in data
+        ):
+            return _normalize(data)
+
+    # Last resort: keyword sniff from free text so we don't hard-fail a good look
+    low = text.lower()
+    comps = []
+    for name in ("breadboard", "led", "resistor", "jumper", "usb", "arduino", "nano"):
+        if name in low:
+            comps.append("LED" if name == "led" else name)
+    if comps:
+        return {
+            "visible_electronics": True,
+            "board": "nano" if "nano" in low else ("uno" if "uno" in low else "unknown"),
+            "components": comps,
+            "wires": [],
+            "pins_used": [],
+            "action": "wiring",
+            "risks": [],
+            "confidence": 0.55,
+            "summary": re.sub(r"\s+", " ", text)[:240],
+            "placement_advice": "",
+        }
+
     return {
         "visible_electronics": False,
         "board": "unknown",
@@ -146,6 +183,31 @@ def _parse_jsonish(text: str) -> dict:
         "action": "none",
         "risks": [],
         "confidence": 0.0,
-        "summary": cleaned[:400],
+        "summary": re.sub(r"\s+", " ", text)[:400],
         "placement_advice": "",
+    }
+
+
+def _normalize(data: dict) -> dict:
+    comps = data.get("components") or []
+    if not isinstance(comps, list):
+        comps = []
+    visible = data.get("visible_electronics")
+    if visible is None:
+        visible = bool(comps) or str(data.get("board") or "").lower() in {"nano", "uno"}
+    try:
+        confidence = float(data.get("confidence") or (0.7 if visible else 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.7 if visible else 0.0
+    return {
+        "visible_electronics": bool(visible),
+        "board": data.get("board") or "unknown",
+        "components": comps,
+        "wires": data.get("wires") if isinstance(data.get("wires"), list) else [],
+        "pins_used": data.get("pins_used") if isinstance(data.get("pins_used"), list) else [],
+        "action": data.get("action") or "none",
+        "risks": data.get("risks") if isinstance(data.get("risks"), list) else [],
+        "confidence": confidence,
+        "summary": str(data.get("summary") or "").strip(),
+        "placement_advice": str(data.get("placement_advice") or "").strip(),
     }

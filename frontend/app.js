@@ -320,16 +320,16 @@ async function pushFrame() {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.detail || "frame failed");
     renderSteps(data.steps);
+    const comps = (data.raw?.components || []).join(",") || "—";
     const seeing = data.reliable
-      ? `seeing · ${data.raw?.board || "board"}`
-      : "no electronics yet";
+      ? `seeing · ${data.raw?.board || "board"} · ${comps}`
+      : "searching…";
     feedSource.textContent = `${feedSource.dataset.camera || "camera"} · ${seeing}`;
 
     for (const alert of data.alerts || []) {
       addMessage("system", escapeHtml(alert.text || ""));
       if (alert.speak) speak(alert.text || "");
     }
-    // Only speak placement tips when Cosmos actually sees the bench
     if (data.reliable && data.advice && data.advice !== lastAdvice) {
       lastAdvice = data.advice;
       addMessage("agent", escapeHtml(data.advice));

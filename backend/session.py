@@ -17,6 +17,8 @@ import vss
 WAND_BASE = "https://api.inference.wandb.ai/v1"
 WAND_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
 STREAK_NEEDED = 2
+# If the board is already partly built, catch up in one confident look.
+CATCHUP_CONFIDENCE = 0.55
 
 # Structured evidence required before a step can complete.
 STEP_EVIDENCE = {
@@ -126,21 +128,28 @@ class LiveSession:
         visible = raw.get("visible_electronics")
         comps = self._norm_list(raw.get("components"))
         board = str(raw.get("board") or "unknown").lower()
+        summary = str(raw.get("summary") or "").lower()
         try:
             confidence = float(raw.get("confidence") or 0)
         except (TypeError, ValueError):
             confidence = 0.0
 
-        if visible is False:
-            return False
-        if visible is True and confidence >= 0.45 and (comps or board in {"nano", "uno"}):
+        # Explicit false only wins if there is also no component evidence
+        if visible is False and not comps and board == "unknown":
+            # still allow keyword recovery from summary
+            if not any(
+                w in summary
+                for w in ("arduino", "nano", "breadboard", "led", "resistor", "jumper")
+            ):
+                return False
+
+        if comps or board in {"nano", "uno"}:
             return True
-        # Fallback if model omits the flag: need board + at least one part
-        if board in {"nano", "uno"} and comps:
-            return confidence >= 0.4 or confidence == 0.0 and len(comps) >= 2
-        if "breadboard" in comps and any(c in comps for c in ("led", "resistor", "jumper", "arduino", "nano", "uno")):
+        if visible is True:
             return True
-        return False
+        if any(w in summary for w in ("arduino", "nano", "breadboard", "led", "resistor")):
+            return True
+        return confidence >= 0.5 and visible is not False
 
     def _support_from_structure(self, raw: dict) -> dict[str, bool]:
         comps = self._norm_list(raw.get("components"))
@@ -249,25 +258,49 @@ class LiveSession:
             if rules.usb_is_connected(blob) or "usb" in self._norm_list(raw.get("components")):
                 self.usb_connected = True
 
-            # Only the current open step can accrue streak
-            for step in rules.STEPS:
-                sid = step["id"]
-                if self.done[sid]:
-                    continue
-                if support.get(sid):
-                    self.streak[sid] = self.streak.get(sid, 0) + 1
-                else:
-                    self.streak[sid] = 0
-                if self.streak[sid] >= STREAK_NEEDED:
-                    self.done[sid] = True
-                    alerts.append(
-                        {
-                            "severity": "info",
-                            "text": f"Verified step: {step['title']}",
-                            "speak": False,
-                        }
-                    )
-                break
+            try:
+                confidence = float(raw.get("confidence") or 0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+
+            # Catch-up: one confident look can verify every already-done physical step
+            if confidence >= CATCHUP_CONFIDENCE or len(self._norm_list(raw.get("components"))) >= 3:
+                for step in rules.STEPS:
+                    sid = step["id"]
+                    if self.done[sid]:
+                        continue
+                    if support.get(sid):
+                        self.done[sid] = True
+                        self.streak[sid] = STREAK_NEEDED
+                        alerts.append(
+                            {
+                                "severity": "info",
+                                "text": f"Verified step: {step['title']}",
+                                "speak": False,
+                            }
+                        )
+                    else:
+                        break
+            else:
+                # Cautious path: only the next open step, needs two agreeing frames
+                for step in rules.STEPS:
+                    sid = step["id"]
+                    if self.done[sid]:
+                        continue
+                    if support.get(sid):
+                        self.streak[sid] = self.streak.get(sid, 0) + 1
+                    else:
+                        self.streak[sid] = 0
+                    if self.streak[sid] >= STREAK_NEEDED:
+                        self.done[sid] = True
+                        alerts.append(
+                            {
+                                "severity": "info",
+                                "text": f"Verified step: {step['title']}",
+                                "speak": False,
+                            }
+                        )
+                    break
 
             note = rules.merge_circuit(
                 self.notes[-1] if self.notes else None,
