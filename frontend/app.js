@@ -1,619 +1,378 @@
-/**
- * CURRENT — proactive Blink teacher UI.
- * Curriculum + tips from backend coach; vision via Cosmos; voice via Canary ASR.
- */
-const BASE =
-  location.pathname === "/app" || location.pathname.startsWith("/app/")
-    ? "/app"
-    : "";
+/** CURRENT shell: hero layout, coach subtitles, voice, QR, trace/scene integration. */
+const $ = (id) => document.getElementById(id);
+const Q = new URLSearchParams(location.search);
+const DEMO = Q.get("demo") === "1";
+const PHONE = Q.get("role") === "phone";
+const BASE = location.pathname === "/app" || location.pathname.startsWith("/app/") ? "/app" : "";
+document.body.classList.toggle("demo", DEMO);
+document.body.classList.toggle("phone", PHONE);
 
-const thread = document.getElementById("chatThread");
-const form = document.getElementById("chatForm");
-const input = document.getElementById("chatInput");
-const voiceBtn = document.getElementById("voiceBtn");
-const stepList = document.getElementById("stepList");
-const stepProgress = document.getElementById("stepProgress");
-const stepTotal = document.getElementById("stepTotal");
-const video = document.getElementById("benchVideo");
-const feedIdle = document.getElementById("feedIdle");
-const armCamera = document.getElementById("armCamera");
-const feedClock = document.getElementById("feedClock");
-const statusEl = document.querySelector(".top__status");
-const cosmosPanel = document.getElementById("cosmosPanel");
-const cosmosBadge = document.getElementById("cosmosBadge");
-const twinPanel = document.getElementById("twinPanel");
-const projectLabel = document.getElementById("projectLabel");
-const vizHint = document.getElementById("vizHint");
-const vizLegend = document.getElementById("vizLegend");
-const btnBlink = document.getElementById("btnBlink");
-const btnNext = document.getElementById("btnNext");
-const overlay = document.getElementById("yoloOverlay");
-const pipeLog = document.getElementById("pipeLog");
-const togBoxes = document.getElementById("togBoxes");
-const togVerbose = document.getElementById("togVerbose");
-const btnForce = document.getElementById("btnForce");
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const video = $("benchVideo"), overlay = $("yoloOverlay"), feedPanel = $("feedPanel");
+let coach = null, ws = null, camWs = null, sessionCode = Q.get("code"), board = "nano";
+let lastYolo = null, prevMistakes = 0, voiceOn = true, userGesture = false, lastSpoken = "";
 
-let coach = null;
-let ws = null;
-let sessionCode = null;
-let mediaStream = null;
-let sendingFrames = false;
-let frameCount = 0;
-let lastYolo = null;
-
-function setPipeStage(active, extra = "") {
-  document.querySelectorAll(".pipe").forEach((el) => {
-    el.classList.toggle("is-on", el.dataset.stage === active);
-  });
-  if (pipeLog && (togVerbose?.checked ?? true)) {
-    pipeLog.textContent = extra || pipeLog.textContent;
-  }
+/* ---------- status ---------- */
+function setLive(word, ok = true) {
+  $("liveWord").textContent = word;
+  $("chipLive").style.opacity = ok ? 1 : 0.6;
+  $("phoneStatus").textContent = `${word}${sessionCode ? " · " + sessionCode : ""}`;
 }
-
-function drawYoloBoxes(msg) {
-  lastYolo = msg;
-  if (!overlay || !video) return;
-  const show = togBoxes?.checked ?? true;
-  const w = video.clientWidth || 0;
-  const h = video.clientHeight || 0;
-  if (!w || !h) return;
-  overlay.width = w;
-  overlay.height = h;
-  const ctx = overlay.getContext("2d");
-  ctx.clearRect(0, 0, w, h);
-  if (!show) return;
-  const boxes = msg?.boxes || [];
-  const shape = msg?.shape; // [H, W] from YOLO
-  const srcH = shape?.[0] || video.videoHeight || h;
-  const srcW = shape?.[1] || video.videoWidth || w;
-  const sx = w / srcW;
-  const sy = h / srcH;
-  boxes.forEach((b) => {
-    const [x1, y1, x2, y2] = b.xyxy || [];
-    if (x2 == null) return;
-    const rx = x1 * sx;
-    const ry = y1 * sy;
-    const rw = (x2 - x1) * sx;
-    const rh = (y2 - y1) * sy;
-    ctx.strokeStyle = "#d6ff4b";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(rx, ry, rw, rh);
-    ctx.fillStyle = "rgba(12,14,16,0.75)";
-    const label = `${b.label} ${Math.round((b.confidence || 0) * 100)}%`;
-    ctx.font = "12px IBM Plex Mono, monospace";
-    const tw = ctx.measureText(label).width + 8;
-    ctx.fillRect(rx, Math.max(0, ry - 18), tw, 16);
-    ctx.fillStyle = "#d6ff4b";
-    ctx.fillText(label, rx + 4, Math.max(12, ry - 5));
-  });
+function setVerify(word, cls) {
+  $("verifyWord").textContent = word;
+  $("chipVerify").className = "chip " + (cls || "");
 }
-
-function setCosmosHud(text, hot = false) {
-  if (cosmosPanel) {
-    cosmosPanel.textContent = text;
-    cosmosPanel.classList.toggle("is-hot", hot);
-  }
+function setConf(v) {
+  $("confWord").textContent = v == null ? "—" : Math.round(v * 100) + "%";
 }
+const setPipe = (t) => { const p = $("pipeLog"); if (p && t) p.textContent = t; };
 
-function escapeHtml(str) {
-  return String(str)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+/* ---------- coach subtitle + voice ---------- */
+function showCoach(text) {
+  const el = $("coachLine");
+  el.innerHTML = String(text).split(/\s+/).map((w, i) => `<span class="w" style="animation-delay:${Math.min(i * 40, 1800)}ms">${esc(w)}&nbsp;</span>`).join("");
 }
-
-function addMessage(role, text) {
-  const who =
-    role === "agent" ? "Current" : role === "system" ? "Alert" : "You";
-  const el = document.createElement("article");
-  el.className = `msg msg--${role}`;
-  el.innerHTML = `
-    <div class="msg__who">${who}</div>
-    <p class="msg__body">${text}</p>
-  `;
-  thread.appendChild(el);
-  thread.scrollTop = thread.scrollHeight;
+function speak(text) {
+  if (!voiceOn || !userGesture || !window.speechSynthesis || !text || text === lastSpoken) return;
+  lastSpoken = text;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1.05;
+    speechSynthesis.speak(u);
+  } catch {}
 }
+addEventListener("pointerdown", () => { userGesture = true; }, { once: true });
+$("btnVoice").onclick = () => {
+  voiceOn = !voiceOn; userGesture = true;
+  $("btnVoice").classList.toggle("is-off", !voiceOn);
+  $("btnVoice").textContent = voiceOn ? "🔊 Voice" : "🔇 Muted";
+  if (!voiceOn) speechSynthesis?.cancel();
+};
 
-function setStatus(label, ok = true) {
-  if (!statusEl) return;
-  statusEl.innerHTML = `<span class="top__dot" aria-hidden="true"></span>${label}`;
-  statusEl.style.opacity = ok ? "1" : "0.7";
+/* ---------- coach state ---------- */
+function mistakeBanner(mistakes) {
+  const box = $("mistake");
+  const n = mistakes.length;
+  if (n) {
+    const m = mistakes[0];
+    box.hidden = false; box.classList.remove("fixed");
+    $("mistakeTag").textContent = `${(m.severity || "error").toUpperCase()} DETECTED${n > 1 ? ` · +${n - 1} more` : ""}`;
+    $("mistakeTitle").textContent = m.title || m.id;
+    $("mistakeFix").textContent = m.fix ? `FIX: ${m.fix}` : "";
+    if (!prevMistakes) { $("flashfx").className = "flashfx"; void $("flashfx").offsetWidth; $("flashfx").className = "flashfx red"; window.CurrentScene?.flash?.("error"); }
+    setVerify(`${n} ISSUE${n > 1 ? "S" : ""}`, "bad");
+  } else if (prevMistakes) {
+    box.hidden = false; box.classList.add("fixed");
+    $("mistakeTag").textContent = "CORRECTED";
+    $("mistakeTitle").textContent = "Circuit verified ✓";
+    $("mistakeFix").textContent = "";
+    $("flashfx").className = "flashfx"; void $("flashfx").offsetWidth; $("flashfx").className = "flashfx green";
+    window.CurrentScene?.flash?.("ok");
+    window.gsap?.fromTo(box, { scale: 1.15 }, { scale: 1, duration: 0.5, ease: "back.out(2)" });
+    setVerify("OK", "ok");
+    setTimeout(() => { if (box.classList.contains("fixed")) box.hidden = true; }, 3200);
+  } else if (!coach?.step) setVerify("—");
+  prevMistakes = n;
 }
 
 function applyCoach(state) {
   if (!state) return;
-  coach = state;
-  const project = state.project;
-
-  if (project) {
-    projectLabel.innerHTML = `Building <em>${escapeHtml(project.title.split("—")[0].trim())}</em><span class="top__sep" aria-hidden="true"> · </span>Arduino Nano`;
-  } else {
-    projectLabel.textContent = "What do you want to build?";
-  }
-
+  coach = { ...(coach || {}), ...state };
+  if (state.board) setBoardUi(state.board);
+  const p = state.project;
+  $("projectLabel").innerHTML = p
+    ? `Building <em>${esc(p.title.split("—")[0].trim())}</em> · ${board === "esp32" ? "ESP32" : "Arduino Nano"}`
+    : "What do you want to build?";
+  const steps = state.steps || coach.steps || [];
   const idx = state.step_index || 0;
-  const total = state.step_total || (state.steps || []).length || 0;
-  stepProgress.textContent = total ? String(idx + 1) : "—";
-  stepTotal.textContent = total ? String(total) : "—";
-
-  if (state.phase === "teaching" && (state.step || state.steps)) {
-    if (state.steps) window.__BLINK_STEPS = state.steps;
-    renderTeachingSteps(state);
-    const step = state.step || (state.steps || [])[state.step_index || 0];
-    if (step) {
-      syncNano3d(step);
-      vizHint.textContent = step.title;
-      vizLegend.textContent = step.action || step.teach || "";
-    }
+  const total = state.step_total || steps.length;
+  $("railBar").style.width = total ? ((idx + (state.done ? 1 : 0.4)) / total) * 100 + "%" : "0";
+  if (state.phase === "teaching" && steps.length) {
+    $("stepList").innerHTML = steps.map((s, i) =>
+      `<li class="step ${i < idx ? "is-done" : i === idx ? "is-active" : ""}" data-index="${i}"><b>${String(i + 1).padStart(2, "0")}</b>${esc(s.title)}</li>`).join("");
+    const cur = state.step || steps[idx];
+    const why = cur?.why || cur?.concept;
+    $("whyBox").innerHTML = why ? `<b>WHY ›</b> ${esc(why)}` : "";
+    $("vizHint").textContent = cur?.title || "3D circuit";
   } else {
-    stepList.innerHTML = (state.projects || [])
-      .map(
-        (p, i) => `
-      <li class="step ${i === 0 ? "is-active" : ""}" data-id="${escapeHtml(p.id)}">
-        <span class="step__index">${String(i + 1).padStart(2, "0")}</span>
-        <p class="step__title">${escapeHtml(p.title)}</p>
-        <p class="step__hint">${escapeHtml(p.pitch)}</p>
-      </li>`
-      )
-      .join("");
+    $("stepList").innerHTML = (state.projects || []).map((pr, i) =>
+      `<li class="step" data-project="${esc(pr.id)}"><b>${String(i + 1).padStart(2, "0")}</b>${esc(pr.title)}</li>`).join("");
+    $("whyBox").textContent = "";
   }
+  mistakeBanner(state.mistakes || []);
+  feedScene({ coach: state });
+  if (!state.mistakes?.length && state.phase === "teaching") setVerify(state.step_index >= total - 1 && state.done ? "BUILD COMPLETE" : "WATCHING", "");
 }
 
-function renderTeachingSteps(state) {
-  const steps =
-    state.steps ||
-    window.__BLINK_STEPS ||
-    [
-      { id: "orient", title: "Orient the Nano and breadboard" },
-      { id: "led", title: "Seat the LED (polarity matters)" },
-      { id: "resistor", title: "Add a 220Ω series resistor" },
-      { id: "gnd", title: "Close the circuit to GND" },
-      { id: "flash", title: "Power up and run Blink" },
-    ];
-  const active = state.step_index || 0;
-  stepList.innerHTML = steps
-    .map((step, i) => {
-      const st =
-        i < active ? "is-done" : i === active ? "is-active" : "";
-      const hint =
-        i === active && state.step
-          ? state.step.teach || state.step.action || ""
-          : step.teach || step.hint || "";
-      return `
-      <li class="step ${st}" data-index="${i}" data-id="${escapeHtml(step.id)}">
-        <span class="step__index">${String(i + 1).padStart(2, "0")}</span>
-        <p class="step__title">${escapeHtml(step.title)}</p>
-        <p class="step__hint">${escapeHtml(hint)}</p>
-      </li>`;
-    })
-    .join("");
+let lastTwin = null, lastFindings = null;
+function feedScene(extra = {}) {
+  if (extra.twin) lastTwin = extra.twin;
+  if (extra.findings) lastFindings = extra.findings;
+  const c = extra.coach || coach || {};
+  try {
+    window.CurrentScene?.update({
+      board, project: c.project, stepIndex: c.step_index || 0, twin: lastTwin, findings: lastFindings,
+      steps: c.steps, step: c.step, mistakes: c.mistakes || [],
+    });
+  } catch (e) { console.warn("scene update", e); }
+}
+function setBoardUi(b) {
+  board = b === "esp32" ? "esp32" : "nano";
+  document.querySelectorAll("#boardSel button").forEach((x) => x.classList.toggle("is-on", x.dataset.board === board));
+  window.CurrentScene?.setBoard?.(board);
 }
 
-function syncNano3d(step) {
-  if (window.CURRENT_NANO3D && step) {
-    window.CURRENT_NANO3D.setStep(step);
-  }
+/* ---------- yolo overlay ---------- */
+function drawYolo(msg) {
+  lastYolo = msg;
+  const w = feedPanel.clientWidth, h = feedPanel.clientHeight;
+  overlay.width = w; overlay.height = h;
+  const ctx = overlay.getContext("2d");
+  ctx.clearRect(0, 0, w, h);
+  if (!$("togBoxes").checked) return;
+  const [sh, sw] = msg?.shape || [360, 640];
+  const sx = w / sw, sy = h / sh;
+  const t = performance.now() / 1000;
+  (msg?.boxes || []).forEach((b, i) => {
+    const [x1, y1, x2, y2] = b.xyxy || [];
+    if (x2 == null) return;
+    const bad = b.bad;
+    const col = bad ? "#ff3b57" : "#c8ff3d";
+    const rx = x1 * sx, ry = y1 * sy, rw = (x2 - x1) * sx, rh = (y2 - y1) * sy;
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.shadowColor = col; ctx.shadowBlur = 10;
+    const L = Math.min(18, rw / 3, rh / 3);   // AR corner brackets
+    ctx.beginPath();
+    [[rx, ry, 1, 1], [rx + rw, ry, -1, 1], [rx, ry + rh, 1, -1], [rx + rw, ry + rh, -1, -1]].forEach(([x, y, dx, dy]) => {
+      ctx.moveTo(x + dx * L, y); ctx.lineTo(x, y); ctx.lineTo(x, y + dy * L);
+    });
+    ctx.stroke(); ctx.shadowBlur = 0;
+    ctx.globalAlpha = 0.07 + 0.05 * Math.sin(t * 3 + i); ctx.fillStyle = col; ctx.fillRect(rx, ry, rw, rh); ctx.globalAlpha = 1;
+    const label = `${b.label} ${Math.round((b.confidence || 0) * 100)}%`;
+    ctx.font = "600 13px IBM Plex Mono, monospace";
+    const tw = ctx.measureText(label).width + 10;
+    ctx.fillStyle = "rgba(5,8,12,.85)"; ctx.fillRect(rx, Math.max(0, ry - 20), tw, 18);
+    ctx.fillStyle = col; ctx.fillText(label, rx + 5, Math.max(13, ry - 6));
+  });
 }
+addEventListener("resize", () => lastYolo && drawYolo(lastYolo));
 
-function speak(text) {
-  if (!window.speechSynthesis || !text) return;
-  const u = new SpeechSynthesisUtterance(text);
-  speechSynthesis.cancel();
-  speechSynthesis.speak(u);
-}
-
-async function connectBackend() {
-  const r = await fetch(`${BASE}/api/session`, { method: "POST" });
-  if (!r.ok) throw new Error("session failed");
-  sessionCode = (await r.json()).code;
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(
-    `${proto}://${location.host}${BASE}/ws?code=${sessionCode}&role=phone`
-  );
-  ws.onopen = () => setStatus(`Watching · ${sessionCode}`);
-  ws.onclose = () => setStatus("Disconnected", false);
-  ws.onerror = () => setStatus("Socket error", false);
-  ws.onmessage = (ev) => {
-    let msg;
-    try {
-      msg = JSON.parse(ev.data);
-    } catch {
-      return;
-    }
-    onBackend(msg);
-  };
-}
-
-function send(obj) {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
-}
-
+/* ---------- backend message router (also used by replay) ---------- */
 function onBackend(msg) {
+  if (!msg) return;
+  if (msg.type === "trace") { routeTrace(msg); return; }
   if (msg.coach) applyCoach(msg.coach);
   if (msg.type === "coach") applyCoach(msg);
-
-  if (msg.type === "joined" && msg.coach) {
-    applyCoach(msg.coach);
+  if (msg.type === "joined") {
+    if (msg.code) { sessionCode = msg.code; renderJoin(); }
+    setLive("watching");
   }
-
   if (msg.type === "yolo") {
-    setPipeStage(
-      "yolo",
-      `YOLO ${msg.ok ? "ok" : "fail"} · ${Math.round(msg.ms || 0)} ms\n` +
-        `labels: ${(msg.labels || []).join(", ") || "(none)"}\n` +
-        `gate: ${msg.gate?.allow_cosmos ? "ALLOW Cosmos" : "SKIP Cosmos"} — ${msg.gate?.reason || "?"}\n` +
-        `${msg.gate?.detail || ""}`
-    );
-    drawYoloBoxes(msg);
-    if (cosmosBadge && !String(cosmosBadge.textContent).includes("calling")) {
-      cosmosBadge.textContent = `yolo · ${Math.round(msg.ms || 0)} ms`;
-    }
+    drawYolo(msg);
+    setPipe(`YOLO ${Math.round(msg.ms || 0)}ms · ${(msg.labels || []).join(", ") || "none"}\ngate: ${msg.gate?.allow_cosmos ? "ALLOW" : "SKIP"} ${msg.gate?.reason || ""}`);
+    if (msg.gate?.confidence != null) setConf(msg.gate.confidence);
   }
-
-  if (msg.type === "perception_skip") {
-    setPipeStage(
-      "gate",
-      `GATE blocked Cosmos\nreason: ${msg.reason}\n${msg.detail || ""}\n` +
-        `yolo ${(msg.labels || []).join(", ") || "(none)"} · ${msg.yolo_ms ?? "—"} ms\n` +
-        `called_cosmos: false`
-    );
-    if (cosmosBadge) cosmosBadge.textContent = "cosmos · gated";
-    setCosmosHud(
-      `SKIP Cosmos — ${msg.reason}\n${msg.detail || ""}\n` +
-        `YOLO: ${(msg.labels || []).join(", ") || "(none)"} · ${msg.yolo_ms ?? "—"} ms`,
-      true
-    );
-    setStatus("Gated — aim at board", false);
-  }
-
+  if (msg.type === "perception_skip") { $("cosmosBadge").textContent = "cosmos · gated"; setLive("aim at board", false); }
   if (msg.type === "cosmos_status") {
-    if (msg.state === "queued_force") {
-      setPipeStage("cosmos", "Force analyze queued…");
-      setStatus("Force queued");
-    } else if (msg.state === "calling") {
-      setPipeStage(
-        "cosmos",
-        `COSMOS calling (real NIM)\nyolo ${msg.yolo_ms ?? "—"} ms · ok=${msg.yolo_ok}\n` +
-          `labels: ${(msg.labels || []).join(", ") || "(none)"}\n` +
-          `gate: ${msg.gate?.reason || "allow"} · forced=${!!msg.forced}`
-      );
-      if (cosmosBadge) cosmosBadge.textContent = "cosmos · calling…";
-      setCosmosHud(
-        `COSMOS calling…\nyolo ${msg.yolo_ms ?? "—"} ms` +
-          (msg.labels?.length ? `\nlabels: ${msg.labels.join(", ")}` : "") +
-          `\ncalled_cosmos: true`,
-        true
-      );
-      setStatus("Cosmos running…");
-    } else if (msg.state === "done") {
-      setPipeStage(
-        "cosmos",
-        `COSMOS done · ${Math.round(msg.ms || 0)} ms · scene=${msg.scene || "?"}`
-      );
-      if (cosmosBadge)
-        cosmosBadge.textContent = `cosmos · ${Math.round(msg.ms || 0)} ms`;
-      setCosmosHud(
-        `COSMOS ok · ${Math.round(msg.ms || 0)} ms` +
-          (msg.retries ? ` · retries ${msg.retries}` : "") +
-          (msg.model ? `\nmodel: ${msg.model}` : "") +
-          `\nscene: ${msg.scene || "?"}`,
-        false
-      );
-      setStatus(`Cosmos ${Math.round(msg.ms || 0)} ms`);
-    } else if (msg.state === "error") {
-      setPipeStage("cosmos", `COSMOS error · ${msg.error}`);
-      if (cosmosBadge) cosmosBadge.textContent = "cosmos · error";
-      setCosmosHud(
-        `COSMOS error · ${msg.error || "failed"} · http ${msg.http ?? "—"} · ${msg.ms ?? "—"} ms`,
-        true
-      );
-      setStatus("Cosmos error", false);
-    }
+    const b = $("cosmosBadge");
+    if (msg.state === "calling") { b.textContent = "cosmos · calling…"; setLive("cosmos thinking"); }
+    if (msg.state === "done") { b.textContent = `cosmos · ${Math.round(msg.ms || 0)}ms`; setLive("watching"); }
+    if (msg.state === "error") { b.textContent = "cosmos · error"; setLive("cosmos error", false); }
   }
-
-  if (msg.type === "guidance" && msg.text) {
-    setPipeStage("coach", `Coach tip · ${msg.source || "llm"}`);
-    const src = msg.source || "llm";
-    const ms = msg.ms != null ? ` · ${Math.round(msg.ms)} ms` : "";
-    addMessage(
-      "agent",
-      escapeHtml(msg.text) +
-        ` <span style="opacity:.55;font-size:.85em">[${escapeHtml(src)}${ms}]</span>`
-    );
-    speak(msg.text);
-  }
-
   if (msg.type === "twin") {
-    const twin = msg.twin || {};
-    const timing = msg.timing || {};
-    if (twinPanel) twinPanel.textContent = JSON.stringify(twin, null, 2);
-    const comps = (twin.components || [])
-      .map((c) => `${c.id}:${c.type}`)
-      .join(", ");
-    const places = (twin.placements || [])
-      .map((p) => `${p.id}@${p.anode_hole || p.holes || "?"}`)
-      .join(", ");
-    setCosmosHud(
-      `COSMOS ok · ${Math.round(timing.cosmos_ms || 0)} ms` +
-        (timing.llm_ms != null
-          ? ` · coach ${Math.round(timing.llm_ms)} ms`
-          : "") +
-        `\nscene: ${twin.scene || "?"} · ${twin.observation || ""}` +
-        `\ncomponents: ${comps || "(none)"}` +
-        (places ? `\nholes: ${places}` : ""),
-      twin.scene === "other"
-    );
-    setStatus(
-      twin.scene === "other"
-        ? "Not a bench scene"
-        : `Twin · ${comps || "empty"}`
-    );
-    setPipeStage(
-      "coach",
-      twin.observation
-        ? `Saw: ${twin.observation}`
-        : `Twin components: ${comps || "(none)"}`
-    );
+    const t = msg.twin || {};
+    if (t.confidence != null) setConf(t.confidence);
+    feedScene({ twin: t, findings: msg.findings });
   }
-
-  if (msg.type === "perception_error") {
-    addMessage(
-      "system",
-      "Cosmos could not parse a circuit twin — fill the frame with the breadboard."
-    );
-  }
-
-  if (msg.type === "transcript" && msg.text) {
-    if (msg.asr === "canary") {
-      addMessage(
-        "user",
-        escapeHtml(msg.text) +
-          ` <span style="opacity:.55;font-size:.85em">[canary${msg.ms != null ? ` · ${Math.round(msg.ms)} ms` : ""}]</span>`
-      );
-    }
-  }
-
-  if (msg.type === "asr_status" && msg.ok === false) {
-    setStatus("Canary ASR miss", false);
+  if (msg.findings && msg.type !== "twin") feedScene({ findings: msg.findings });
+  if (msg.type === "guidance" && msg.text) { showCoach(msg.text); speak(msg.text); }
+  if (msg.type === "transcript" && msg.text && msg.asr === "canary") $("coachUser").textContent = `You: ${msg.text}`;
+  if (msg.type === "asr_status" && msg.ok === false) setLive("mic miss", false);
+}
+function routeTrace(msg) {
+  if (window.CurrentTrace) window.CurrentTrace.push(msg);
+  else {
+    const d = document.createElement("div");
+    d.className = "tl " + (msg.status || "");
+    d.innerHTML = `<b>${esc(msg.stage)}</b> ${esc(msg.label)} · ${esc(msg.sponsor)} · ${esc(msg.status)}${msg.ms != null ? " · " + msg.ms + "ms" : ""}<br>${esc(msg.detail || "")}`;
+    $("traceRoot").prepend(d);
   }
 }
+window.CurrentApp = { onBackend, setBoardUi, speak, get board() { return board; } };
 
-form.addEventListener("submit", (e) => {
+/* ---------- send ---------- */
+function send(obj) {
+  if (DEMO) return window.CurrentReplay?.onClient?.(obj);
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+$("chatForm").addEventListener("submit", (e) => {
   e.preventDefault();
-  const text = input.value.trim();
-  if (!text) return;
-  addMessage("user", escapeHtml(text));
-  input.value = "";
-  autoGrow();
-  send({ type: "ask", text });
+  const t = $("chatInput").value.trim();
+  if (!t) return;
+  $("coachUser").textContent = `You: ${t}`;
+  $("chatInput").value = "";
+  send({ type: "ask", text: t });
 });
-
-input.addEventListener("input", autoGrow);
-input.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    form.requestSubmit();
-  }
-});
-
-function autoGrow() {
-  input.style.height = "auto";
-  input.style.height = `${Math.min(input.scrollHeight, 96)}px`;
-}
-
-btnBlink?.addEventListener("click", () => {
-  send({ type: "coach_start", project_id: "blink" });
-});
-
-btnNext?.addEventListener("click", () => {
-  send({ type: "ask", text: "next" });
-});
-
-btnForce?.addEventListener("click", () => {
-  send({ type: "force_analyze" });
-  setPipeStage("cosmos", "Force Cosmos requested…");
-});
-
-togBoxes?.addEventListener("change", () => {
-  if (lastYolo) drawYoloBoxes(lastYolo);
-});
-
-window.addEventListener("resize", () => {
-  if (lastYolo) drawYoloBoxes(lastYolo);
-});
-
-stepList.addEventListener("click", (e) => {
+$("btnNext").onclick = () => send({ type: "ask", text: "next" });
+$("btnForce").onclick = () => { send({ type: "force_analyze" }); setPipe("force analyze requested…"); };
+$("togBoxes").onchange = () => lastYolo && drawYolo(lastYolo);
+$("stepList").addEventListener("click", (e) => {
   const li = e.target.closest(".step");
   if (!li) return;
-  const idx = li.dataset.index;
-  if (idx != null) {
-    send({ type: "coach_step", index: Number(idx) });
-  } else if (li.dataset.id === "blink") {
-    send({ type: "coach_start", project_id: "blink" });
-  }
+  if (li.dataset.index != null) send({ type: "coach_step", index: +li.dataset.index });
+  else if (li.dataset.project) send({ type: "coach_start", project_id: li.dataset.project, board });
 });
+document.querySelectorAll("#boardSel button").forEach((b) => b.addEventListener("click", () => {
+  setBoardUi(b.dataset.board);
+  send({ type: "coach_start", project_id: "blink", board });
+}));
+$("btnTrace").onclick = () => $("drawer").classList.toggle("open");
+$("drawerClose").onclick = () => $("drawer").classList.remove("open");
 
-/* -------- Canary hold-to-talk (PCM → WAV) -------- */
-let rec = null;
+/* ---------- QR / join ---------- */
+function joinUrl() {
+  const u = new URL(location.href);
+  u.search = ""; u.hash = "";
+  u.searchParams.set("code", sessionCode || "");
+  u.searchParams.set("role", "phone");
+  return u.toString();
+}
+function qrSvg(url, cell) {
+  try { const q = qrcode(0, "M"); q.addData(url); q.make(); return q.createSvgTag({ cellSize: cell, margin: 0, scalable: true }); } catch { return ""; }
+}
+function renderJoin() {
+  $("codeWord").textContent = sessionCode || "······";
+  if (!sessionCode) return;
+  $("qrMini").innerHTML = qrSvg(joinUrl(), 2);
+  $("qrBig").innerHTML = qrSvg(joinUrl(), 4);
+  $("qrUrl").textContent = joinUrl();
+}
+$("joinBtn").onclick = () => { $("qrPop").hidden = !$("qrPop").hidden; };
 
-function encodeWav(floatChunks, sampleRate) {
-  let len = 0;
-  floatChunks.forEach((c) => (len += c.length));
-  const pcm = new Int16Array(len);
-  let off = 0;
-  for (const chunk of floatChunks) {
-    for (let i = 0; i < chunk.length; i++) {
-      const s = Math.max(-1, Math.min(1, chunk[i]));
-      pcm[off++] = s < 0 ? s * 0x8000 : s * 0x7fff;
-    }
-  }
-  const buffer = new ArrayBuffer(44 + pcm.length * 2);
-  const view = new DataView(buffer);
-  const writeStr = (o, s) => {
-    for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
-  };
-  writeStr(0, "RIFF");
-  view.setUint32(4, 36 + pcm.length * 2, true);
-  writeStr(8, "WAVE");
-  writeStr(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeStr(36, "data");
-  view.setUint32(40, pcm.length * 2, true);
-  let p = 44;
-  for (let i = 0; i < pcm.length; i++, p += 2) view.setInt16(p, pcm[i], true);
-  return buffer;
+/* ---------- sponsors + health ---------- */
+const STATIC_SP = [
+  { sponsor: "NVIDIA", name: "Cosmos", role: "vision twin", ok: true },
+  { sponsor: "CoreWeave", name: "GPUs", role: "inference", ok: true },
+  { sponsor: "W&B", name: "Inference", role: "coach LLM", ok: true },
+  { sponsor: "VAST Data", name: "DataEngine", role: "memory", ok: true },
+  { sponsor: "Cursor", name: "built with", role: "", ok: true },
+];
+function renderSponsors(list) {
+  $("sponsors").innerHTML = `<span>POWERED BY</span>` + list.map((s) =>
+    `<span class="sp" title="${esc(s.detail || s.role || "")}"><i class="dot ${s.ok === false ? "off" : ""}"></i>${esc(s.sponsor)} ${esc(s.name || "")}</span>`).join("");
+}
+renderSponsors(STATIC_SP);
+async function loadSponsors() {
+  try { const r = await fetch(`${BASE}/api/sponsors`); if (r.ok) renderSponsors(await r.json()); } catch {}
+}
+async function loadHealth() {
+  try { const r = await fetch(`${BASE}/health`); if (r.ok) window.CurrentTrace?.setServices(await r.json()); } catch {}
 }
 
-async function startCanaryRec() {
-  if (rec) return;
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const ctx = new AudioContext({ sampleRate: 16000 });
-    const src = ctx.createMediaStreamSource(stream);
-    const proc = ctx.createScriptProcessor(4096, 1, 1);
-    const chunks = [];
-    proc.onaudioprocess = (e) => {
-      chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-    };
-    src.connect(proc);
-    proc.connect(ctx.destination);
-    rec = { stream, ctx, proc, chunks };
-    voiceBtn.classList.add("is-hot");
-    setStatus("Listening (Canary)…");
-  } catch (err) {
-    addMessage(
-      "system",
-      `Mic denied (${err.name}). Allow microphone, or type instead.`
-    );
+/* ---------- connect ---------- */
+async function connect() {
+  const role = PHONE ? "phone" : "laptop";
+  if (!sessionCode) {
+    const r = await fetch(`${BASE}/api/session`, { method: "POST" });
+    sessionCode = (await r.json()).code;
   }
+  renderJoin();
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}${BASE}/ws?code=${sessionCode}&role=${role}`);
+  ws.onopen = () => setLive("watching");
+  ws.onclose = () => { setLive("reconnecting", false); setTimeout(() => connect().catch(() => {}), 2000); };
+  ws.onmessage = (ev) => { try { onBackend(JSON.parse(ev.data)); } catch {} };
 }
 
-async function stopCanaryRec() {
-  if (!rec) return;
-  const { stream, ctx, proc, chunks } = rec;
-  rec = null;
-  voiceBtn.classList.remove("is-hot");
+/* ---------- camera ---------- */
+$("armCamera").onclick = async () => {
   try {
-    proc.disconnect();
-    stream.getTracks().forEach((t) => t.stop());
-    const rate = ctx.sampleRate || 16000;
-    await ctx.close();
-    if (!chunks.length) {
-      setStatus("No audio caught", false);
-      return;
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: PHONE ? "environment" : "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    video.srcObject = stream; await video.play();
+    video.classList.add("is-live"); $("feedIdle").classList.add("is-hidden");
+    if (!PHONE && !DEMO) { // laptop cam: frames must come from a phone-role socket
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      camWs = new WebSocket(`${proto}://${location.host}${BASE}/ws?code=${sessionCode}&role=phone`);
     }
-    const wav = encodeWav(chunks, rate);
-    const bytes = new Uint8Array(wav);
-    let s = "";
-    const step = 0x8000;
-    for (let i = 0; i < bytes.length; i += step) {
-      s += String.fromCharCode.apply(null, bytes.subarray(i, i + step));
-    }
-    setStatus("Transcribing…");
-    send({ type: "audio", wav_b64: btoa(s) });
-  } catch (err) {
-    addMessage("system", `Voice capture failed: ${err.message}`);
-  }
-}
-
-voiceBtn.addEventListener("mousedown", (e) => {
-  e.preventDefault();
-  startCanaryRec();
-});
-voiceBtn.addEventListener("mouseup", (e) => {
-  e.preventDefault();
-  stopCanaryRec();
-});
-voiceBtn.addEventListener("mouseleave", () => {
-  if (rec) stopCanaryRec();
-});
-voiceBtn.addEventListener("touchstart", (e) => {
-  e.preventDefault();
-  startCanaryRec();
-});
-voiceBtn.addEventListener("touchend", (e) => {
-  e.preventDefault();
-  stopCanaryRec();
-});
-
-/* Camera */
-armCamera.addEventListener("click", async () => {
-  try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false,
-    });
-    video.srcObject = mediaStream;
-    await video.play();
-    video.classList.add("is-live");
-    feedIdle.classList.add("is-hidden");
-    addMessage(
-      "agent",
-      "Camera armed — point at the breadboard so Cosmos can see each wire."
-    );
-    startFrameLoop();
-  } catch (err) {
-    addMessage(
-      "system",
-      `Could not open the camera (${err.name}). Allow permission or pick Continuity Camera.`
-    );
-  }
-});
-
-function startFrameLoop() {
-  if (sendingFrames) return;
-  sendingFrames = true;
-  const canvas = document.createElement("canvas");
+    frameLoop();
+  } catch (e) { setLive("camera denied", false); }
+};
+if (PHONE && !DEMO) { $("feedIdle").querySelector("p").textContent = "Tap to start the camera"; }
+let looping = false;
+function frameLoop() {
+  if (looping) return; looping = true;
+  const c = document.createElement("canvas");
   setInterval(() => {
-    if (!video.videoWidth || !ws || ws.readyState !== 1) return;
-    const w = 640;
-    const h = Math.round((video.videoHeight * w) / video.videoWidth) || 360;
-    canvas.width = w;
-    canvas.height = h;
-    canvas.getContext("2d").drawImage(video, 0, 0, w, h);
-    canvas.toBlob(
-      async (blob) => {
-        if (!blob) return;
-        const buf = await blob.arrayBuffer();
-        const bytes = new Uint8Array(buf);
-        let s = "";
-        const chunk = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunk) {
-          s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-        }
-        frameCount += 1;
-        if (
-          frameCount % 2 === 1 &&
-          cosmosBadge &&
-          !String(cosmosBadge.textContent).includes("calling")
-        ) {
-          cosmosBadge.textContent = `frames · ${frameCount}`;
-        }
-        send({ type: "frame", jpeg_b64: btoa(s) });
-      },
-      "image/jpeg",
-      0.72
-    );
+    const sock = PHONE ? ws : camWs;
+    if (!video.videoWidth || !sock || sock.readyState !== 1) return;
+    c.width = 640; c.height = Math.round(video.videoHeight * 640 / video.videoWidth) || 360;
+    c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
+    c.toBlob(async (b) => {
+      if (!b) return;
+      const u = new Uint8Array(await b.arrayBuffer()); let s = "";
+      for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+      sock.send(JSON.stringify({ type: "frame", jpeg_b64: btoa(s) }));
+    }, "image/jpeg", 0.72);
   }, 1000);
 }
 
-function tickClock() {
-  const now = new Date();
-  feedClock.textContent = now.toLocaleTimeString("en-GB", { hour12: false });
+/* ---------- hold to talk ---------- */
+let rec = null;
+function encodeWav(chunks, rate) {
+  let len = 0; chunks.forEach((c) => (len += c.length));
+  const buf = new ArrayBuffer(44 + len * 2), v = new DataView(buf);
+  const ws_ = (o, s) => [...s].forEach((ch, i) => v.setUint8(o + i, ch.charCodeAt(0)));
+  ws_(0, "RIFF"); v.setUint32(4, 36 + len * 2, true); ws_(8, "WAVEfmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  ws_(36, "data"); v.setUint32(40, len * 2, true);
+  let o = 44;
+  for (const c of chunks) for (let i = 0; i < c.length; i++, o += 2) { const s = Math.max(-1, Math.min(1, c[i])); v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true); }
+  return buf;
 }
+async function recStart() {
+  if (rec) return; userGesture = true;
+  if (DEMO) { $("voiceBtn").classList.add("is-hot"); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ctx = new AudioContext({ sampleRate: 16000 });
+    const src = ctx.createMediaStreamSource(stream), proc = ctx.createScriptProcessor(4096, 1, 1), chunks = [];
+    proc.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    src.connect(proc); proc.connect(ctx.destination);
+    rec = { stream, ctx, proc, chunks };
+    $("voiceBtn").classList.add("is-hot"); setLive("listening");
+  } catch { setLive("mic denied", false); }
+}
+async function recStop() {
+  $("voiceBtn").classList.remove("is-hot");
+  if (DEMO) return window.CurrentReplay?.onClient?.({ type: "ask", text: "why does the LED need a resistor?" });
+  if (!rec) return;
+  const { stream, ctx, proc, chunks } = rec; rec = null;
+  proc.disconnect(); stream.getTracks().forEach((t) => t.stop());
+  const rate = ctx.sampleRate; await ctx.close();
+  if (!chunks.length) return;
+  const u = new Uint8Array(encodeWav(chunks, rate)); let s = "";
+  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  setLive("transcribing"); send({ type: "audio", wav_b64: btoa(s) });
+}
+const mic = $("voiceBtn");
+["mousedown", "touchstart"].forEach((n) => mic.addEventListener(n, (e) => { e.preventDefault(); recStart(); }));
+["mouseup", "touchend", "mouseleave"].forEach((n) => mic.addEventListener(n, (e) => { e.preventDefault(); recStop(); }));
 
-tickClock();
-setInterval(tickClock, 1000);
+/* ---------- misc ---------- */
+setInterval(() => { $("feedClock").textContent = new Date().toLocaleTimeString("en-GB", { hour12: false }); }, 1000);
+window.CurrentTrace?.mount($("traceRoot"));
+window.CurrentScene?.mount($("scene3d"));
+if (window.CurrentScene) feedScene();
+else setTimeout(() => {   // fallback: legacy Nano viewer
+  if (window.CurrentScene) { window.CurrentScene.mount($("scene3d")); feedScene(); return; }
+  $("scene3d").innerHTML = '<div id="nano3d" style="width:100%;height:100%"></div>';
+  const s = document.createElement("script"); s.src = "./nano3d.js"; document.body.appendChild(s);
+}, 1500);
+loadSponsors(); loadHealth(); setInterval(loadHealth, 30000);
 
-connectBackend().catch((err) => {
-  setStatus("Backend unreachable", false);
-  addMessage("system", `Backend connect failed: ${err.message}`);
-});
+if (DEMO) {
+  sessionCode = sessionCode || "DEMO42"; renderJoin(); setLive("watching");
+  import("./replay.js").catch((e) => console.error("replay", e));
+} else {
+  connect().catch(() => setLive("backend unreachable", false));
+}
