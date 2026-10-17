@@ -77,6 +77,7 @@ function resolvePin(board, raw) {
   const g = /^GPIO(\d+)$/.exec(k);
   if (g) k = "D" + g[1];
   if (k === "+5V" || k === "VBUS") k = "5V";
+  if (k === "5V" && !T.has(k) && T.has("VIN")) k = "VIN";
   return T.has(k) ? { name: k, pos: T.get(k).clone() } : null;
 }
 function holePos(col, row) {
@@ -290,7 +291,7 @@ function buildBoard(key) {
   body.position.set(0, 0.4, B.cz); g.add(body); edges(body, C.cyan, 0.9);
   const add = (geo, hex, x, y, z, edge) => { const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: hex, roughness: 0.4, metalness: 0.7 })); m.position.set(x, y, z); g.add(m); if (edge) edges(m, C.cyan, 0.8); return m; };
   if (nano) {
-    add(new THREE.BoxGeometry(2.6, 1.2, 3.4), 0xb8c4d0, -9.0, 0.95, B.cz);
+    add(new THREE.BoxGeometry(2.6, 1.2, 3.4), 0x5a6a7c, -9.0, 0.95, B.cz);
     add(new THREE.BoxGeometry(3.2, 0.3, 3.2), 0x05080c, 1, 0.7, B.cz, true);
     add(new THREE.BoxGeometry(1.2, 0.3, 1.2), 0x05080c, -4, 0.7, B.cz + 1.2, true);
   } else {
@@ -307,7 +308,7 @@ function buildBoard(key) {
       l.position.set(i - 7, 0.57, B.cz + sgn * (B.half - 1.5)); g.add(l);
     });
   });
-  const tag = flatLabel(B.label, 8, 1.1, {}); tag.position.set(0, 0.57, B.cz); g.add(tag);
+  const tag = flatLabel(B.label, 5, 0.7, { color: "#3a8fa6" }); tag.position.set(nano ? 4 : 0, 0.57, B.cz + (nano ? 1.6 : 2.5)); g.add(tag);
   g.userData.pinMeshes = pinMeshes;
   return g;
 }
@@ -512,7 +513,7 @@ async function init() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.1;
   const scene = new THREE.Scene(); scene.background = new THREE.Color(C.bg); scene.fog = new THREE.FogExp2(C.bg, 0.011);
-  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 400); camera.position.set(0, 24, 36);
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 400); camera.position.set(0, 24, 38);
   scene.add(new THREE.AmbientLight(0x6688aa, 0.9));
   const dl = new THREE.DirectionalLight(0x9fefff, 1.4); dl.position.set(10, 30, 15); scene.add(dl);
   const pl = new THREE.PointLight(C.mag, 60, 60); pl.position.set(-18, 8, 10); scene.add(pl);
