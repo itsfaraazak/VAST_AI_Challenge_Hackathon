@@ -155,3 +155,10 @@ body.phone .app{grid-template-rows:auto 1fr auto;padding:6px}
 body.phone .stage{grid-template-columns:minmax(0,1fr)}body.phone .feed__view{aspect-ratio:auto;flex:1}
 body.phone .coach{grid-template-columns:1fr;padding:10px;position:static}body.phone .coach__line{font-size:16px;max-height:5em}
 body.phone .mic{width:80px;height:80px}
+
+.step__row{position:relative}
+.step__more{margin-left:auto;background:none;border:0;color:var(--mut);font:600 16px/1 var(--mono);cursor:pointer;opacity:0;padding:2px 6px;border-radius:6px;transition:opacity .15s}
+.step:hover .step__more,.step.is-active .step__more,.step__more:focus-visible{opacity:.45}.step__more:hover{opacity:1;background:rgba(255,255,255,.06)}
+.stepmenu{position:fixed;z-index:60;width:220px;background:#0e151b;border:1px solid var(--line);border-radius:10px;padding:4px;box-shadow:0 12px 32px rgba(0,0,0,.5);display:flex;flex-direction:column}
+.stepmenu button{background:none;border:0;color:var(--dim);text-align:left;font:400 12.5px var(--body);padding:8px 10px;border-radius:7px;cursor:pointer}
+.stepmenu button:hover{background:rgba(120,200,255,.1);color:#fff}
