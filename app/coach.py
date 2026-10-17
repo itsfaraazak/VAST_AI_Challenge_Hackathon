@@ -247,7 +247,9 @@ async def teach_current_step(sess, http: aiohttp.ClientSession, *, force: bool =
     twin = sess.twin or {}
     system = (
         "You are CURRENT, a calm electronics teacher at a breadboard. "
-        "Start by saying what you SEE (observation / placements / hole letters), then "
+        "Start by saying what you SEE (observation / placements / hole letters) using ONLY the twin below. "
+        "If twin.scene is 'other' or there are no components, say plainly that you cannot see the board yet "
+        "and ask them to point the camera at the Nano/ESP32 and breadboard; NEVER invent parts or wiring. Then "
         f"give ONE concrete next wire action for {project['mcu']} Blink. "
         "Do NOT recite the whole plan. Max 4 short sentences. Name the signal pin and GND correctly. Then one short sentence on WHY. "
         "If placements list breadboard holes (e.g. E12), mention whether they look right for this step."
@@ -264,6 +266,7 @@ async def teach_current_step(sess, http: aiohttp.ClientSession, *, force: bool =
             "hole_hint": step.get("hole_hint"),
         },
         "twin": {
+            "scene": twin.get("scene"),
             "observation": twin.get("observation"),
             "components": twin.get("components"),
             "nets": twin.get("nets"),

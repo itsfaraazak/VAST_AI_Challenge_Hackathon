@@ -23,6 +23,8 @@ USE_VERIFIER = os.environ.get("USE_VERIFIER", "0").strip() in ("1", "true", "yes
 async def run_worker(sess: Session, http: aiohttp.ClientSession) -> None:
     _canary.TRACE_SESSION = sess  # lets ASR emit trace spans (main.py doesn't pass sess)
     last_frame_trace = 0.0
+    last_seq = -1
+    last_proc = 0.0
     while True:
         await asyncio.sleep(0.15)
         if sess.latest_frame is None:
@@ -33,6 +35,9 @@ async def run_worker(sess: Session, http: aiohttp.ClientSession) -> None:
         frame = sess.latest_frame
         seq = sess.frame_seq
         force = bool(getattr(sess, "force_cosmos", False))
+        if seq == last_seq and not force and time.time() - last_proc < settings.heartbeat_s:
+            continue  # same frame, nothing new to learn: don't burn GPU
+        last_seq, last_proc = seq, time.time()
 
         now_t = time.time()
         if now_t - last_frame_trace >= 1.0:

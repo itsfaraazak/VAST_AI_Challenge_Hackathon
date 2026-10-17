@@ -173,8 +173,9 @@ async def _handle_msg(sess, role: str, data: dict, http: aiohttp.ClientSession) 
     elif typ == "coach_start":
         st = start_project(sess, data.get("project_id") or "blink", board=data.get("board"))
         tip = await teach_current_step(sess, http, force=True)
+        pin = "GPIO2" if st.get("board") == "esp32" else "D13"
         text = (
-            "Blink it is. D13 → 220Ω → LED anode; cathode → GND. "
+            f"Blink it is. {pin} → 220Ω → LED anode; cathode → GND. "
             + ((tip or {}).get("text") or "")
         )
         await sess.broadcast({"type": "coach", **st})
