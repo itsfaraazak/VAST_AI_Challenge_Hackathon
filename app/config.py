@@ -24,6 +24,7 @@ class Settings:
         self.embed_url = _opt("COSMOS_EMBED1_URL", "http://166.19.38.112:8003").rstrip("/")
         self.canary_url = _opt("CANARY_1B_URL", "http://166.19.38.112:8004").rstrip("/")
         self.canary_model = _opt("CANARY_MODEL", "")
+        self.canary_language = _opt("CANARY_LANGUAGE", "en-US")
         self.vss_url = _opt("VSS_URL", "").rstrip("/")
         self.vss_user = _opt("VSS_USERNAME")
         self.vss_password = _opt("VSS_PASSWORD")

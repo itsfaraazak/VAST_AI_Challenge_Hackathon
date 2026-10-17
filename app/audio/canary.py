@@ -1,6 +1,7 @@
 """Canary ASR via POST /v1/audio/transcriptions."""
 from __future__ import annotations
 
+import json
 import logging
 
 import aiohttp
@@ -58,11 +59,11 @@ async def transcribe(http: aiohttp.ClientSession, wav: bytes, sess=None) -> dict
 
 
 async def _transcribe(http: aiohttp.ClientSession, wav: bytes) -> dict:
+    """Riva-style NIM: `language` (en-US) is required, `model` names are rejected."""
     if not settings.gpu_token:
         return {"text": "", "ok": False, "error": "no_token"}
-    model = await resolve_model(http)
     form = aiohttp.FormData()
-    form.add_field("model", model)
+    form.add_field("language", settings.canary_language)
     form.add_field("file", wav, filename="audio.wav", content_type="audio/wav")
     headers = {"Authorization": f"Bearer {settings.gpu_token}"}
     with timed("canary") as t:
@@ -74,25 +75,7 @@ async def _transcribe(http: aiohttp.ClientSession, wav: bytes) -> dict:
         ) as resp:
             raw = await resp.read()
             if resp.status >= 400:
-                # retry without model / alternate name
-                for alt in ("", "nvidia/canary-1b-flash", "canary-1b"):
-                    if alt == model:
-                        continue
-                    form2 = aiohttp.FormData()
-                    if alt:
-                        form2.add_field("model", alt)
-                    form2.add_field("file", wav, filename="audio.wav", content_type="audio/wav")
-                    async with http.post(
-                        settings.canary_url + "/v1/audio/transcriptions",
-                        data=form2,
-                        headers=headers,
-                        timeout=60,
-                    ) as resp2:
-                        if resp2.status < 400:
-                            data = await resp2.json(content_type=None)
-                            text = data.get("text") if isinstance(data, dict) else str(data)
-                            return {"text": text or "", "ok": True, "ms": t["ms"], "model": alt or "default"}
-                return {"text": "", "ok": False, "http": resp.status, "ms": t["ms"]}
-            data = await resp.json(content_type=None)
+                return {"text": "", "ok": False, "http": resp.status, "error": raw[:160].decode("utf-8", "replace"), "ms": t["ms"]}
+            data = json.loads(raw)
     text = data.get("text") if isinstance(data, dict) else str(data)
-    return {"text": text or "", "ok": True, "ms": t["ms"], "model": model}
+    return {"text": text or "", "ok": True, "ms": t["ms"], "model": "canary-1b"}
