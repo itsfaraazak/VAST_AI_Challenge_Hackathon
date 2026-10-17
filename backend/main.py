@@ -12,10 +12,12 @@ from pydantic import BaseModel
 
 import vss
 from session import ReplaySession
+from simulator import SimState
 
 app = FastAPI(title="CURRENT")
 client = vss.VssClient()
 session = ReplaySession(client)
+sim = SimState()
 FRONTEND = Path(__file__).resolve().parent / "frontend"
 
 
@@ -31,6 +33,21 @@ class TickIn(BaseModel):
 class ChatIn(BaseModel):
     original_video: str
     message: str
+
+
+class SimSyncIn(BaseModel):
+    original_video: str | None = None
+
+
+class SimAdviseIn(BaseModel):
+    original_video: str | None = None
+    goal: str | None = None
+    question: str | None = None
+
+
+class SimApplyIn(BaseModel):
+    action_id: str
+    original_video: str | None = None
 
 
 def _fail(exc: vss.VssError) -> None:
@@ -74,6 +91,45 @@ def chat(body: ChatIn) -> dict:
         raise HTTPException(status_code=400, detail="message is required")
     try:
         return session.chat(body.original_video, text)
+    except vss.VssError as exc:
+        _fail(exc)
+
+
+@app.get("/api/sim")
+def get_sim() -> dict:
+    return sim.snapshot()
+
+
+@app.post("/api/sim/sync")
+def sync_sim(body: SimSyncIn) -> dict:
+    try:
+        circuit = session.circuit_for(body.original_video) if body.original_video else session.circuit_for(None)
+        return sim.sync(circuit)
+    except vss.VssError as exc:
+        _fail(exc)
+
+
+@app.post("/api/sim/advise")
+def advise_sim(body: SimAdviseIn) -> dict:
+    try:
+        if body.original_video:
+            circuit = session.circuit_for(body.original_video)
+            sim.sync(circuit)
+        return sim.advise(question=body.question or "", goal=body.goal or "arduino_nano_blink")
+    except vss.VssError as exc:
+        _fail(exc)
+
+
+@app.post("/api/sim/apply")
+def apply_sim(body: SimApplyIn) -> dict:
+    action = (body.action_id or "").strip()
+    if not action:
+        raise HTTPException(status_code=400, detail="action_id is required")
+    try:
+        if body.original_video:
+            circuit = session.circuit_for(body.original_video)
+            sim.sync(circuit)
+        return sim.apply(action)
     except vss.VssError as exc:
         _fail(exc)
 

@@ -58,7 +58,7 @@
               </div>
             </div>
             <div class="feed__live-bar" id="liveBar" hidden>
-              <label class="sr-only" for="cameraSelectLive">Clip</label>
+              <label class="sr-only" for="cameraSelectLive">Camera source</label>
               <select id="cameraSelectLive" class="feed__select feed__select--live"></select>
             </div>
             <div class="feed__chrome">
@@ -76,6 +76,26 @@
           <ol class="steps" id="stepList"></ol>
         </aside>
       </main>
+
+      <section class="sim" aria-label="Electronics simulator">
+        <header class="sim__head">
+          <h2>Simulator</h2>
+          <p id="simAdvice">Wokwi Blink — sync from the bench note, then run.</p>
+        </header>
+        <div class="sim__actions">
+          <button type="button" class="sim__btn" id="simSync">Sync from bench</button>
+          <button type="button" class="sim__btn sim__btn--primary" id="simRun">Run</button>
+          <button type="button" class="sim__btn" id="simApply">Apply next fix</button>
+        </div>
+        <iframe
+          id="wokwiFrame"
+          class="sim__frame"
+          title="Wokwi Arduino simulator"
+          src="https://wokwi.com/experimental/embed"
+          allow="fullscreen"
+        ></iframe>
+        <p class="sim__status" id="simStatus" role="status">Idle</p>
+      </section>
 
       <section class="dock" aria-label="Assistant">
         <div class="dock__thread" id="chatThread" aria-live="polite"></div>

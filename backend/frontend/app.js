@@ -1,3 +1,5 @@
+import { WokwiClient } from "./wokwi-client.js";
+
 const STEPS = [
   {
     id: "led",
@@ -308,6 +310,10 @@ async function postTick(timeSec) {
       addMessage("system", alert.text);
       if (alert.speak) speak(alert.text);
     }
+    if (data.sim_hint) {
+      addMessage("agent", data.sim_hint);
+      setSimAdvice(data.sim_hint);
+    }
   } catch {
     /* keep the last good step list */
   }
@@ -339,6 +345,101 @@ addMessage(
   "I am watching an indexed Blink clip. Play it and I will mark a step only after two segments in a row support it."
 );
 
+const simAdvice = document.getElementById("simAdvice");
+const simStatus = document.getElementById("simStatus");
+const simSync = document.getElementById("simSync");
+const simRun = document.getElementById("simRun");
+const simApply = document.getElementById("simApply");
+const wokwiFrame = document.getElementById("wokwiFrame");
+const wokwi = new WokwiClient(wokwiFrame);
+let lastSim = null;
+let nextActionId = "";
+
+function setSimAdvice(text) {
+  if (simAdvice && text) simAdvice.textContent = text;
+}
+
+function setSimStatus(text) {
+  if (simStatus) simStatus.textContent = text;
+}
+
+function rememberSim(data) {
+  lastSim = data;
+  nextActionId = (data.next_actions && data.next_actions[0] && data.next_actions[0].id) || "";
+  setSimAdvice(data.advice || "");
+  const issues = (data.issues || []).map((item) => item.id).join(", ") || "none";
+  setSimStatus(data.ok ? "Sim OK — Blink loop closed" : `Issues: ${issues}`);
+}
+
+async function loadSimIntoWokwi(data) {
+  rememberSim(data);
+  if (!data.files) return;
+  try {
+    await wokwi.uploadFiles(data.files);
+    setSimStatus((simStatus.textContent || "") + " · files uploaded");
+  } catch (err) {
+    setSimStatus("Wokwi not ready yet — click Run again in a few seconds");
+  }
+}
+
+simSync.addEventListener("click", async () => {
+  setSimStatus("Syncing…");
+  try {
+    const response = await fetch("api/sim/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ original_video: activeVideo || undefined }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error("sync failed");
+    await loadSimIntoWokwi(data);
+  } catch {
+    setSimStatus("Sync failed");
+  }
+});
+
+simRun.addEventListener("click", async () => {
+  setSimStatus("Starting sim…");
+  try {
+    let data = lastSim;
+    if (!data || !data.files) {
+      const response = await fetch("api/sim");
+      data = await response.json();
+      if (!response.ok) throw new Error("sim failed");
+    }
+    await loadSimIntoWokwi(data);
+    const firmware = (data.embed && data.embed.firmware) || "sketch.ino";
+    await wokwi.start(firmware, firmware);
+    setSimStatus("Running in Wokwi");
+  } catch {
+    setSimStatus("Could not start Wokwi — wait for the embed, then try Run");
+  }
+});
+
+simApply.addEventListener("click", async () => {
+  if (!nextActionId) {
+    setSimStatus("No next fix — sync first or circuit already OK");
+    return;
+  }
+  setSimStatus(`Applying ${nextActionId}…`);
+  try {
+    const response = await fetch("api/sim/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action_id: nextActionId,
+        original_video: activeVideo || undefined,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error("apply failed");
+    await loadSimIntoWokwi(data);
+    addMessage("agent", data.advice || "Applied the next sim fix.");
+  } catch {
+    setSimStatus("Apply failed");
+  }
+});
+
 fetch("api/session")
   .then((response) => {
     if (!response.ok) throw new Error("session failed");
@@ -350,3 +451,10 @@ fetch("api/session")
   .catch(() => {
     addMessage("system", "The bench index did not load. Refresh in a moment.");
   });
+
+fetch("api/sim")
+  .then((response) => (response.ok ? response.json() : null))
+  .then((data) => {
+    if (data) rememberSim(data);
+  })
+  .catch(() => {});

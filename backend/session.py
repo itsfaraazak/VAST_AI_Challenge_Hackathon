@@ -11,12 +11,17 @@ import urllib.parse
 import urllib.request
 
 import rules
+import simulator
 import vss
 
 WAND_BASE = "https://api.inference.wandb.ai/v1"
 WAND_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
 
 _CHANGE = re.compile(r"what.*(change|differ|move)|what did i|what changed", re.I)
+_SIM_ASK = re.compile(
+    r"what should i (wire|do|build)|next (step|wire)|will it work|simulate|wokwi|sim\b|what to wire",
+    re.I,
+)
 _TOPIC_WORDS = (
     ("resistor", re.compile(r"resistor|220", re.I), rules.SUPPORT["resistor"]),
     ("led", re.compile(r"\bleds?\b|diode", re.I), rules.SUPPORT["led"]),
@@ -152,6 +157,15 @@ class ReplaySession:
         latest = state["notes"][-1]
         return {"components": list(latest["components"]), "connections": list(latest["connections"])}
 
+    def circuit_for(self, original_video: str | None) -> dict:
+        self.ensure()
+        with self._lock:
+            video = original_video or self.active_video
+            if video not in {clip["original_video"] for clip in self.clips}:
+                raise vss.VssError("clip is not in the bench list", 404)
+            state = self._ensure_state(video)
+            return self._circuit(state)
+
     def public(self) -> dict:
         self.ensure()
         with self._lock:
@@ -239,12 +253,19 @@ class ReplaySession:
             note = dict(note)
             note["at_sec"] = seg["segment_start_sec"]
             state["notes"].append(note)
+            circuit = {"components": note["components"], "connections": note["connections"]}
+            sim_hint = None
+            if alerts:
+                advice = simulator.advise(circuit, question="warning")
+                if advice.get("next_actions"):
+                    sim_hint = advice["advice"]
             return {
                 "segment_number": number,
                 "caption": caption,
                 "steps": self._steps(state),
                 "alerts": alerts,
-                "circuit": {"components": note["components"], "connections": note["connections"]},
+                "circuit": circuit,
+                "sim_hint": sim_hint,
             }
 
     def _excerpts(self, state: dict, message: str) -> tuple[float | None, list[dict]]:
@@ -284,15 +305,28 @@ class ReplaySession:
                 newer = state["notes"][-1] if state["notes"] else None
                 diff = rules.diff_notes(older, newer)
             circuit = self._circuit(state)
+        sim_payload = None
+        if _SIM_ASK.search(message):
+            sim_payload = simulator.advise(circuit, question=message)
         try:
             agent = self.client.ask(message, original_video)
         except vss.VssError:
             agent = {"answer": "", "tool_used": "", "evidence": {}}
-        phrased = _phrase(message, agent.get("answer") or "", excerpts, diff, circuit, seek)
+        phrased = _phrase(
+            message,
+            agent.get("answer") or "",
+            excerpts,
+            diff,
+            circuit,
+            seek,
+            sim_payload,
+        )
         if phrased:
             answer = phrased
             if seek is not None and str(int(seek)) not in answer:
                 answer = answer.rstrip() + f" That shows up at {int(seek)} seconds."
+        elif sim_payload and sim_payload.get("advice"):
+            answer = sim_payload["advice"]
         else:
             answer = agent.get("answer") or "I could not read that moment from this clip."
         evidence = agent.get("evidence") if isinstance(agent.get("evidence"), dict) else {}
@@ -305,7 +339,14 @@ class ReplaySession:
             evidence_summary = f"{evidence_summary} Caption-grounded seek {int(seek)}s."
         if evidence.get("segment_count"):
             evidence_summary = f"{evidence_summary} Segments used {evidence.get('segments_used')} of {evidence.get('segment_count')}."
-        return {"answer": answer, "seek_sec": seek, "evidence_summary": evidence_summary.strip()}
+        if sim_payload:
+            evidence_summary = f"{evidence_summary} Sim: {sim_payload.get('advice', '')}".strip()
+        return {
+            "answer": answer,
+            "seek_sec": seek,
+            "evidence_summary": evidence_summary.strip(),
+            "sim": sim_payload,
+        }
 
 
 def _phrase(
@@ -315,6 +356,7 @@ def _phrase(
     diff: str,
     circuit: dict,
     seek: float | None,
+    sim_payload: dict | None = None,
 ) -> str | None:
     key = os.environ.get("WANDB_API_KEY", "").strip()
     if not key:
@@ -334,6 +376,11 @@ def _phrase(
         lines.append("Circuit-note diff: " + diff)
     if circuit.get("components") or circuit.get("connections"):
         lines.append("Current circuit note components: " + ", ".join(circuit.get("components") or []) or "none")
+    if sim_payload:
+        lines.append("Electrical sim advice (quote this for wiring / will-it-work questions):")
+        lines.append(sim_payload.get("advice") or "")
+        for action in (sim_payload.get("next_actions") or [])[:2]:
+            lines.append(f"- next: {action.get('label')}")
     if agent_answer:
         lines.append("Agent QA answer, cite it but do not repeat claims the excerpts contradict:")
         lines.append(agent_answer[:1800])
@@ -347,6 +394,7 @@ def _phrase(
                 "content": (
                     "You are CURRENT, a bench partner watching one indexed Arduino clip. "
                     "Phrase a reply in one or two short sentences using only the evidence. "
+                    "If sim advice is present for a wiring or will-it-work question, lead with it. "
                     "If a grounded time is provided, mention that number of seconds. "
                     "Do not invent components, mistakes, or moments that the evidence does not state. "
                     "If the evidence does not answer, say that moment is not in this clip."

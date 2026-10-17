@@ -56,7 +56,7 @@ body {
 .app {
   min-height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   max-width: 1440px;
   margin: 0 auto;
   padding: 1rem 1.25rem 1.1rem;
@@ -558,6 +558,84 @@ body {
 
 .dock__send:hover {
   background: #db8a4f;
+}
+
+/* ——— Simulator ——— */
+
+.sim {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.55rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.sim__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.sim__head h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sim__head p {
+  margin: 0;
+  color: var(--mute);
+  font-size: 0.85rem;
+  max-width: 48rem;
+}
+
+.sim__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.sim__btn {
+  appearance: none;
+  border: 1px solid var(--rule);
+  background: var(--panel-2);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+}
+
+.sim__btn:hover {
+  border-color: var(--copper);
+}
+
+.sim__btn--primary {
+  background: var(--copper);
+  border-color: var(--copper);
+  color: #1a1008;
+  font-weight: 700;
+}
+
+.sim__frame {
+  width: 100%;
+  min-height: 280px;
+  height: 36vh;
+  border: 1px solid var(--rule);
+  background: #0a0a0a;
+}
+
+.sim__status {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--mute);
 }
 
 /* ——— Responsive ——— */
