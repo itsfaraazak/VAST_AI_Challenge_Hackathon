@@ -1,0 +1,10 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CurrentCode demo</title><link rel="stylesheet" href="code.css">
+<body style="margin:0;padding:16px;background:#08090c"><div id="h" style="max-width:640px"></div>
+<script src="code.js"></script>
+<script>
+CurrentCode.mount(document.getElementById('h'),{getSession:function(){return ''},send:function(m){
+  setTimeout(function(){CurrentCode.onMessage({type:'sketch',board:'nano',can_undo:true,notes:['Compile check passed (arduino-cli).','No series resistor seen yet: add ~220 ohm in line with the LED.'],
+   code:'// Blink D13: the "hello world" of hardware.\nconst int LED_PIN = 13;   // the pin your resistor + LED hang off\nconst int HALF_PERIOD = 500;  // ms on, then ms off\n\nvoid setup() {\n  // Pins default to INPUT; we must say OUTPUT so it can drive current.\n  pinMode(LED_PIN, OUTPUT);\n}\n\nvoid loop() {\n  digitalWrite(LED_PIN, HIGH);  // 5 V out: LED on\n  delay(HALF_PERIOD);\n  digitalWrite(LED_PIN, LOW);\n  delay(HALF_PERIOD);\n}\n'})},200)}});
+document.querySelector('.cc-chip').click();
+</script>
