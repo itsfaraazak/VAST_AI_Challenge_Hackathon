@@ -366,7 +366,9 @@ if (window.CurrentScene) feedScene();
 else setTimeout(() => {   // fallback: legacy Nano viewer
   if (window.CurrentScene) { window.CurrentScene.mount($("scene3d")); feedScene(); return; }
   $("scene3d").innerHTML = '<div id="nano3d" style="width:100%;height:100%"></div>';
-  const s = document.createElement("script"); s.src = "./nano3d.js"; document.body.appendChild(s);
+  const t = document.createElement("script"); t.src = "https://unpkg.com/three@0.160.0/build/three.min.js";
+  t.onload = () => { const s = document.createElement("script"); s.src = "./nano3d.js"; document.body.appendChild(s); };
+  document.body.appendChild(t);
 }, 1500);
 loadSponsors(); loadHealth(); setInterval(loadHealth, 30000);
 
