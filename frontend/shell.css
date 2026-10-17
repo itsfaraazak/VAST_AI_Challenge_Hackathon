@@ -144,9 +144,9 @@
  html,body{overflow:auto}
  .app{height:auto;min-height:100dvh;overflow:visible;grid-template-rows:auto auto auto}
  .top{flex-wrap:wrap}.sponsors{display:flex}
- .stage{grid-template-columns:1fr}
+ .stage{grid-template-columns:minmax(0,1fr)}
  .hero{height:60vh;min-height:360px}.feed{order:2}.side{order:3;max-height:70vh}
- .coach{grid-template-columns:1fr;position:sticky;bottom:0;z-index:20;background:rgba(10,14,20,.96)}
+ .coach{grid-template-columns:1fr;}
  .coach__line{max-height:7.5em}
 }
 body.phone .top>*:not(.brand):not(.chip--live){display:none}body.phone .top{padding:6px 10px}
