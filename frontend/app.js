@@ -118,10 +118,31 @@ function applyCoach(state) {
     renderPreview();
   }
   mistakeBanner(state.mistakes || []);
+  celebrate(coach);
   feedScene({ coach: state });
   if (!state.mistakes?.length && state.phase === "teaching") setVerify(state.step_index >= total - 1 && state.done ? "BUILD COMPLETE" : "WATCHING", "");
 }
 
+const DONE_TWIN = { scene: "bench", led_lit: true,
+  components: [{ id: "nano1", type: "arduino", value: "nano" }, { id: "r1", type: "resistor", value: "220" }, { id: "d1", type: "led", value: "red" }, { id: "w1", type: "wire", value: "black" }],
+  nets: [["nano1.d13", "r1.a"], ["r1.b", "d1.a"], ["d1.k", "nano1.gnd"]] };
+let wasDone = false, doneTimer = null;
+/* Final step verified: green wash, current flowing D13 -> 220 ohm -> LED -> GND, LED blinking, short "build complete" note. */
+function celebrate(state) {
+  const done = !!(state && state.done && state.phase === "teaching");
+  if (done && !wasDone) {
+    const box = $("mistake");
+    box.hidden = false; box.classList.add("fixed"); clearTimeout(okTimer); clearTimeout(doneTimer);
+    $("mistakeTag").textContent = "BUILD COMPLETE";
+    $("mistakeTitle").textContent = "It blinks ✓";
+    $("mistakeFix").textContent = "D13 → 220Ω → LED → GND, verified end to end.";
+    $("flashfx").className = "flashfx"; void $("flashfx").offsetWidth; $("flashfx").className = "flashfx green";
+    window.CurrentScene?.flash?.("ok");
+    setVerify("BUILD COMPLETE", "ok");
+    doneTimer = setTimeout(() => { box.hidden = true; box.classList.remove("fixed"); }, 7000);
+  }
+  wasDone = done;
+}
 let lastTwin = null, lastFindings = null;
 function feedScene(extra = {}) {
   if (extra.twin) lastTwin = extra.twin;
@@ -129,7 +150,8 @@ function feedScene(extra = {}) {
   const c = extra.coach || coach || {};
   try {
     window.CurrentScene?.update({
-      board, project: c.project, stepIndex: c.step_index || 0, twin: lastTwin, findings: lastFindings,
+      board, project: c.project, stepIndex: c.step_index || 0,
+      twin: (c.done && c.phase === "teaching" && !(lastTwin && lastTwin.led_lit)) ? DONE_TWIN : lastTwin, findings: lastFindings,
       steps: c.steps, step: c.step, mistakes: c.mistakes || [],
     });
   } catch (e) { console.warn("scene update", e); }

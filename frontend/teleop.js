@@ -38,7 +38,7 @@ function send(n, kind) {
   const project = base.project || { id: "blink", title: "Blink — external LED on Arduino Nano", steps };
   const t = STEPS[n - 1];
   const common = { phase: "teaching", steps, project, step_total: 5, board: base.board };
-  const state = (idx, mistakes) => ({ ...base, ...common, step_index: idx, step: steps[idx], mistakes, awaiting_next: false });
+  const state = (idx, mistakes) => ({ ...base, ...common, step_index: idx, step: steps[idx], mistakes, awaiting_next: false, done: false });
   if (kind === "error") {
     const m = [{ id: "teleop-" + n, title: t.err[0], fix: t.err[1], severity: "warning", forced: true }];
     const st = state(n - 1, m);
@@ -47,8 +47,8 @@ function send(n, kind) {
   } else if (kind === "ok") {
     // show then clear in the same tick so the UI plays its normal "all good" transition
     cur.onBackend({ type: "coach", ...state(n - 1, [{ id: "teleop-" + n, title: t.err[0], fix: "", forced: true }]) });
-    const next = Math.min(n, 4), st = state(next, []);
-    cur.onBackend({ type: "coach", ...st, done: n === 5 });
+    const next = Math.min(n, 4), st = { ...state(next, []), done: n === 5 };
+    cur.onBackend({ type: "coach", ...st });
     cur.onBackend({ type: "guidance", text: n < 5 ? `${t.ok} Ready for the next step: ${STEPS[n].title}.` : t.ok, source: "curriculum", coach: st });
   } else {
     cur.onBackend({ type: "coach", ...state(base.step_index || 0, []) });
