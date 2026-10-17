@@ -24,7 +24,7 @@ If scene="other", return ONLY:
 
 If scene="bench", return ONLY this compact JSON (double quotes, no markdown, no extra keys):
 {"scene":"bench",
- "observation":"<max 2 short sentences: what is on the board and what looks wrong>",
+ "observation":"<ONE sentence, max 20 words: what is on the board and what looks wrong>",
  "components":[{"id":"nano1","type":"arduino","value":"nano"},{"id":"r1","type":"resistor","value":"220"},{"id":"d1","type":"led","value":"red"},{"id":"w1","type":"wire","value":"black"}],
  "nets":[["<partid>.<pin>","<partid>.<pin>"]],
  "led_lit":false,
@@ -40,10 +40,16 @@ Rules:
 
 def _from_raw(text: str) -> dict:
     data = json.loads(_repair(text))
+    if isinstance(data, dict):  # drop entries the model left half-written instead of failing the whole frame
+        data["components"] = [c for c in (data.get("components") or []) if isinstance(c, dict) and c.get("id") and c.get("type")]
+        data["nets"] = [n for n in (data.get("nets") or [])
+                        if isinstance(n, list) and len(n) >= 2 and all(isinstance(e, str) and "." in e and "<" not in e for e in n)]
     issues = data.get("issues")
     if isinstance(issues, list) and not data.get("wiring_check"):
         data["wiring_check"] = {"ok": not issues, "issues": [str(i)[:140] for i in issues][:6]}
     twin = parse_twin(data)
+    if twin.get("scene") == "bench" and not twin["components"]:
+        raise TwinParseError("bench scene with no parts: retry")   # useless frame, ask again
     if "led_lit" in data:
         twin["led_lit"] = bool(data["led_lit"])
     return twin
@@ -88,6 +94,13 @@ def _repair(text: str) -> str:
             return cand + "".join(reversed(stack))
         except json.JSONDecodeError:
             continue
+    # last resort: truncated inside the final string value -> close the string and the objects
+    for tail in ('"}', '"]}', '"}]}', '"}}'):
+        try:
+            json.loads(t + tail)
+            return t + tail
+        except json.JSONDecodeError:
+            pass
     return t
 
 
@@ -112,12 +125,12 @@ async def extract_twin(session: aiohttp.ClientSession, jpeg: bytes) -> tuple[dic
     body = {
         "model": model,
         "temperature": 0,
-        "max_tokens": 500,
+        "max_tokens": 600,
         "messages": [{"role": "user", "content": content}],
     }
     text = None
     meta: dict = {"ok": False, "ms": 0, "retries": 0, "model": model, "endpoint": "chat/completions"}
-    for attempt in range(2):
+    for attempt in range(3):
         with timed("cosmos") as t:
             async with session.post(
                 settings.cosmos_url + "/v1/chat/completions",
@@ -146,15 +159,13 @@ async def extract_twin(session: aiohttp.ClientSession, jpeg: bytes) -> tuple[dic
             return twin, meta
         except (TwinParseError, json.JSONDecodeError, ValueError, TypeError):
             meta["retries"] = attempt + 1
+            # Retry from scratch with a little randomness: continuing from the broken reply made it worse,
+            # and a temperature of 0 can loop on the same wrong tokens.
             body = {
                 "model": model,
-                "temperature": 0,
-                "max_tokens": 500,
-                "messages": [
-                    {"role": "user", "content": content},
-                    {"role": "assistant", "content": text or ""},
-                    {"role": "user", "content": "Invalid JSON. Return ONLY the twin JSON object, no markdown."},
-                ],
+                "temperature": (0.4, 0.7)[min(attempt, 1)],
+                "max_tokens": 600,
+                "messages": [{"role": "user", "content": content}],
             }
     meta["error"] = "invalid_json"
     meta["ok"] = False
