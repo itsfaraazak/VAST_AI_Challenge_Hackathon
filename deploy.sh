@@ -15,6 +15,9 @@ GPU_BEARER_TOKEN="${GPU_BEARER_TOKEN:-$(get GPU_BEARER_TOKEN)}"
 WANDB_API_KEY="${WANDB_API_KEY:-$(get WANDB_API_KEY || true)}"
 WANDB_TEAM="${WANDB_TEAM:-$(get WANDB_TEAM || true)}"
 WANDB_PROJECT="${WANDB_PROJECT:-$(get WANDB_PROJECT || true)}"
+for v in S3_ENDPOINT ACCESS_KEY SECRET_KEY S3_CHUNKS_BUCKET VDB_ENDPOINT VASTDB_BUCKET VDB_SCHEMA; do
+  printf -v "$v" '%s' "${!v:-$(get "$v" || true)}"
+done
 NS="$USERNAME"
 TEAM_N="${USERNAME#team-}"
 APP_HOST="video-lab-team-${TEAM_N}.cosmos.vastdata.com"
@@ -82,6 +85,13 @@ kubectl -n "$NS" create secret generic "${APP_NAME}-vss-creds" \
   --from-literal=WANDB_API_KEY="${WANDB_API_KEY:-}" \
   --from-literal=WANDB_TEAM="${WANDB_TEAM:-}" \
   --from-literal=WANDB_PROJECT="${WANDB_PROJECT:-}" \
+  --from-literal=S3_ENDPOINT="${S3_ENDPOINT:-}" \
+  --from-literal=ACCESS_KEY="${ACCESS_KEY:-}" \
+  --from-literal=SECRET_KEY="${SECRET_KEY:-}" \
+  --from-literal=S3_CHUNKS_BUCKET="${S3_CHUNKS_BUCKET:-}" \
+  --from-literal=VDB_ENDPOINT="${VDB_ENDPOINT:-}" \
+  --from-literal=VASTDB_BUCKET="${VASTDB_BUCKET:-}" \
+  --from-literal=VDB_SCHEMA="${VDB_SCHEMA:-}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl -n "$NS" apply -f - <<EOF
@@ -132,6 +142,20 @@ spec:
           valueFrom: { secretKeyRef: { name: ${APP_NAME}-vss-creds, key: WANDB_TEAM } }
         - name: WANDB_PROJECT
           valueFrom: { secretKeyRef: { name: ${APP_NAME}-vss-creds, key: WANDB_PROJECT } }
+        - name: S3_ENDPOINT
+          valueFrom: { secretKeyRef: { name: ${APP_NAME}-vss-creds, key: S3_ENDPOINT, optional: true } }
+        - name: ACCESS_KEY
+          valueFrom: { secretKeyRef: { name: ${APP_NAME}-vss-creds, key: ACCESS_KEY, optional: true } }
+        - name: SECRET_KEY
+          valueFrom: { secretKeyRef: { name: ${APP_NAME}-vss-creds, key: SECRET_KEY, optional: true } }
+        - name: S3_CHUNKS_BUCKET
+          valueFrom: { secretKeyRef: { name: ${APP_NAME}-vss-creds, key: S3_CHUNKS_BUCKET, optional: true } }
+        - name: VDB_ENDPOINT
+          valueFrom: { secretKeyRef: { name: ${APP_NAME}-vss-creds, key: VDB_ENDPOINT, optional: true } }
+        - name: VASTDB_BUCKET
+          valueFrom: { secretKeyRef: { name: ${APP_NAME}-vss-creds, key: VASTDB_BUCKET, optional: true } }
+        - name: VDB_SCHEMA
+          valueFrom: { secretKeyRef: { name: ${APP_NAME}-vss-creds, key: VDB_SCHEMA, optional: true } }
         volumeMounts:
         - name: code
           mountPath: /code
