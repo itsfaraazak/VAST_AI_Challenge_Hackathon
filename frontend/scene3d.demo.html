@@ -16,7 +16,7 @@ button.on{background:#19e3ff;color:#000}
  twin <select id="sc">
   <option value="null">null</option><option value="correct" selected>correct</option><option value="reversed">LED reversed</option>
   <option value="wrongpin">R on 5V</option><option value="nognd">missing GND</option><option value="partial">only resistor</option><option value="bad">malformed</option></select>
- <button id="ok">flash ok</button><button id="err">flash error</button>
+ <button id="sim">live twin sim</button><label><input type="checkbox" id="stale">stale</label><button id="oth">scene other</button><button id="mis">mistake: R on 5V</button> <button id="ok">flash ok</button><button id="err">flash error</button>
 </div>
 <script type="module">
 import { CurrentScene } from "./scene3d.js";
@@ -57,4 +57,20 @@ document.querySelectorAll("[data-b]").forEach((b) => b.onclick = () => { board =
 document.getElementById("step").onchange = push; document.getElementById("sc").onchange = push;
 document.getElementById("ok").onclick = () => CurrentScene.flash("ok"); document.getElementById("err").onclick = () => CurrentScene.flash("error");
 window.__push = push;
+const stages = [
+ { scene: "bench", components: [{ id: "nano1", type: "arduino" }, { id: "bb", type: "breadboard" }], nets: [] },
+ { scene: "bench", components: [{ id: "nano1", type: "arduino" }, { id: "r1", type: "resistor", value: "4.7k" }], nets: [["nano1.d13", "r1.a"]] },
+ { scene: "bench", components: [{ id: "nano1", type: "arduino" }, { id: "r1", type: "resistor", value: "220" }, { id: "led1", type: "led", value: "green" }], nets: [] },
+ { scene: "bench", components: [{ id: "nano1", type: "arduino" }, { id: "r1", type: "resistor", value: "220" }, { id: "led1", type: "led", value: "red" }, { id: "w1", type: "wire", value: "black" }, { id: "w2", type: "wire", value: "yellow" }, { id: "btn1", type: "button" }, { id: "pot1", type: "potentiometer" }], nets: [["nano1.d13", "r1.a"], ["r1.b", "led1.a"], ["led1.k", "w1.a"]], led_lit: true },
+];
+let timer = null, ts = 0, stale = false;
+function feed(i) { CurrentScene.update({ board: "nano", project, stepIndex: 2, twin: stages[i % stages.length] ? { ...stages[i % stages.length] } : null, findings: [], mistakes: [], twinAgeS: stale ? 20 : undefined }); }
+document.getElementById("sim").onclick = () => { clearInterval(timer); ts = 0; feed(0); timer = setInterval(() => feed(++ts), 1500); };
+document.getElementById("stale").onchange = (e) => { stale = e.target.checked; feed(ts); };
+document.getElementById("oth").onclick = () => CurrentScene.update({ board: "nano", project, stepIndex: 2, twin: { scene: "other", components: [] }, findings: [] });
+document.getElementById("mis").onclick = () => CurrentScene.update({ board, project, stepIndex: 1, twin: twin("wrongpin"), findings: [], mistakes: [{ id: "resistor_to_5v", message: "Resistor wired to 5V", parts: ["r1"], pins: ["5V"] }] });
+if (q.get("sim") != null) { stale = q.get("stale") === "1"; feed(+q.get("sim")); if (q.get("go")) document.getElementById("sim").click(); }
+if (q.get("mis")) document.getElementById("mis").click();
+if (q.get("oth")) document.getElementById("oth").click();
+if (q.get("view")) setTimeout(() => CurrentScene.setView(q.get("view")), 500);
 </script></body></html>
