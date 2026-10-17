@@ -79,6 +79,8 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     if sess.worker_task is None or sess.worker_task.done():
         sess.worker_task = asyncio.create_task(run_worker(sess, http))
     ensure_session_coach(sess)
+    if getattr(sess, "ticker_task", None) is None or sess.ticker_task.done():
+        sess.ticker_task = asyncio.create_task(_coach_ticker(sess, http))
     await ws.send_json({
         "type": "joined",
         "code": sess.code,
@@ -169,7 +171,7 @@ async def _handle_msg(sess, role: str, data: dict, http: aiohttp.ClientSession) 
                 "coach": public_coach_state(sess),
             })
     elif typ == "coach_start":
-        st = start_project(sess, data.get("project_id") or "blink")
+        st = start_project(sess, data.get("project_id") or "blink", board=data.get("board"))
         tip = await teach_current_step(sess, http, force=True)
         text = (
             "Blink it is. D13 → 220Ω → LED anode; cathode → GND. "
@@ -254,6 +256,31 @@ async def api_cross_corpus(request: web.Request) -> web.Response:
     return web.json_response(data)
 
 
+async def api_sponsors(request: web.Request) -> web.Response:
+    try:
+        from sponsors.registry import sponsor_status
+        return web.json_response(await sponsor_status(request.app["http"]))
+    except Exception as e:  # noqa: BLE001
+        log.warning("sponsors unavailable: %s", e)
+        return web.json_response([], status=404)
+
+
+async def _coach_ticker(sess, http) -> None:
+    """Always-on: let the coach speak up on its own (idle hints, proactive corrections)."""
+    try:
+        from coach import tick
+    except ImportError:
+        return
+    while sess.phone is not None or sess.laptop is not None:
+        await asyncio.sleep(4)
+        try:
+            tip = await tick(sess, http)
+            if tip:
+                await _broadcast_guidance(sess, tip)
+        except Exception:  # noqa: BLE001
+            log.exception("coach tick failed")
+
+
 async def api_replay(_: web.Request) -> web.Response:
     if not REPLAY.exists():
         return web.json_response({"events": []})
@@ -285,6 +312,7 @@ def create_app() -> web.Application:
     app.router.add_post("/api/verify", api_verify)
     app.router.add_get("/api/cross-corpus", api_cross_corpus)
     app.router.add_get("/api/replay", api_replay)
+    app.router.add_get("/api/sponsors", api_sponsors)
     app.router.add_get("/", index)
     # CURRENT frontend assets at /app.js /styles.css (relative to index)
     if UI_ROOT.exists():

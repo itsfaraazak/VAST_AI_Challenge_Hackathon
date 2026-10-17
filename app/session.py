@@ -45,6 +45,7 @@ class Session:
     last_skip_ts: float = 0.0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     worker_task: asyncio.Task | None = None
+    ticker_task: asyncio.Task | None = None
 
     async def broadcast(self, msg: dict) -> None:
         dead: list[web.WebSocketResponse] = []
