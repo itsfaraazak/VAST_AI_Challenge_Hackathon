@@ -76,6 +76,18 @@ async def _llm(sess, http, system: str, user: str, **kw) -> tuple[str, dict]:
         return "", {"ms": 0, "model": None, "source": "policy"}
 
 
+async def _vss_examples(sess, http, project_title: str, step_title: str) -> list[str]:
+    """Past-build captions from VSS as few-shot grounding. Fails soft."""
+    try:
+        from history import grounding_examples
+        async with span(sess, "vss_fewshot", model="vss-search", sponsor="vast") as sp:
+            ex = await grounding_examples(http, project_title, step_title)
+            sp["detail"] = f"{len(ex)} past-build captions"
+            return ex
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _msg(sess, text: str, ids: list[str], source: str = "curriculum", **extra) -> dict:
     d = {"type": "guidance", "text": text, "finding_ids": ids, "source": source,
          "coach": public_coach_state(sess)}
@@ -389,6 +401,9 @@ async def teach_current_step(sess, http: aiohttp.ClientSession, *, force: bool =
         "step_index": sess.coach["step_index"] + 1,
         "step_total": len(project["steps"]),
     })
+    examples = await _vss_examples(sess, http, project["title"], step["title"])
+    if examples:
+        system += " Examples of what past builds looked like (from VAST video memory; style/grounding only, do not copy): " + " | ".join(examples)
     text, meta = await _llm(sess, http, system, user)
     if not text:
         text = _fallback_tip(step)

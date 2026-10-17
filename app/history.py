@@ -97,3 +97,36 @@ async def cross_corpus_demo(http: aiohttp.ClientSession) -> dict:
             return {"ok": True, "hits": brief, "count": len(brief)}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": type(e).__name__}
+
+
+_GROUND_CACHE: dict[str, list[str]] = {}
+
+
+async def grounding_examples(http: aiohttp.ClientSession, project: str, step_title: str, k: int = 3) -> list[str]:
+    """Captions of past builds from VSS, used as few-shot grounding for the coach. Fails soft ([])."""
+    key = f"{project}|{step_title}"
+    if key in _GROUND_CACHE:
+        return _GROUND_CACHE[key]
+    try:
+        token = await login(http)
+        if not token:
+            return []
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        body = {"query": f"{project} {step_title} breadboard arduino wiring", "top_k": 8,
+                "llm_top_n": 0, "min_similarity": 0.15, "include_public": True}
+        async with http.post(settings.vss_url + "/api/v1/search", json=body, headers=headers, timeout=12) as resp:
+            if resp.status >= 400:
+                return []
+            data = await resp.json(content_type=None)
+        rows = data.get("results") or data.get("chunk_results") or [] if isinstance(data, dict) else []
+        out: list[str] = []
+        for r in rows:
+            t = (r.get("reasoning_content") or r.get("caption") or "").strip() if isinstance(r, dict) else ""
+            if len(t) > 40:
+                out.append(t[:300])
+            if len(out) >= k:
+                break
+        _GROUND_CACHE[key] = out
+        return out
+    except Exception:  # noqa: BLE001
+        return []
