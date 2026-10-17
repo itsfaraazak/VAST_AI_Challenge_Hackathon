@@ -37,9 +37,15 @@ const video = document.getElementById("benchVideo");
 const feedIdle = document.getElementById("feedIdle");
 const armCamera = document.getElementById("armCamera");
 const feedClock = document.getElementById("feedClock");
+const feedSource = document.getElementById("feedSource");
+const cameraSelect = document.getElementById("cameraSelect");
+const cameraSelectLive = document.getElementById("cameraSelectLive");
+const liveBar = document.getElementById("liveBar");
 
 let activeStep = 0;
 let mediaStream = null;
+let videoDevices = [];
+let preferredDeviceId = "";
 
 function renderSteps() {
   stepTotal.textContent = String(STEPS.length);
@@ -205,23 +211,170 @@ if (SpeechRecognition) {
   });
 }
 
-/* Camera */
+/* Camera — Continuity Camera / Desk View / built-in */
+
+function deviceScore(label = "") {
+  const l = label.toLowerCase();
+  if (l.includes("desk view")) return 100;
+  if (l.includes("continuity")) return 90;
+  if (l.includes("iphone") || l.includes("ipad")) return 80;
+  if (l.includes("back") || l.includes("rear") || l.includes("environment"))
+    return 50;
+  if (l.includes("facetime") || l.includes("integrated") || l.includes("built-in"))
+    return 20;
+  return 10;
+}
+
+function friendlyLabel(device, index) {
+  const raw = (device.label || "").trim();
+  if (!raw) return `Camera ${index + 1}`;
+  if (/desk view/i.test(raw)) return `Desk View — ${raw}`;
+  if (/continuity/i.test(raw)) return `Continuity — ${raw}`;
+  return raw;
+}
+
+function pickPreferredId(devices) {
+  if (!devices.length) return "";
+  const ranked = [...devices].sort(
+    (a, b) => deviceScore(b.label) - deviceScore(a.label)
+  );
+  return ranked[0].deviceId;
+}
+
+function fillCameraSelects(selectedId) {
+  const options = videoDevices
+    .map((d, i) => {
+      const id = d.deviceId;
+      const label = friendlyLabel(d, i);
+      const sel = id === selectedId ? " selected" : "";
+      return `<option value="${id}"${sel}>${label}</option>`;
+    })
+    .join("");
+
+  if (!videoDevices.length) {
+    cameraSelect.innerHTML = `<option value="">No cameras found</option>`;
+    cameraSelect.disabled = true;
+    return;
+  }
+
+  cameraSelect.innerHTML = options;
+  cameraSelect.disabled = false;
+  cameraSelectLive.innerHTML = options;
+}
+
+async function listCameras() {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    cameraSelect.innerHTML = `<option value="">Camera API unavailable</option>`;
+    return [];
+  }
+  const all = await navigator.mediaDevices.enumerateDevices();
+  videoDevices = all.filter((d) => d.kind === "videoinput");
+  preferredDeviceId = pickPreferredId(videoDevices);
+  fillCameraSelects(preferredDeviceId || videoDevices[0]?.deviceId || "");
+  return videoDevices;
+}
+
+function stopStream() {
+  if (!mediaStream) return;
+  for (const track of mediaStream.getTracks()) track.stop();
+  mediaStream = null;
+}
+
+async function startCamera(deviceId) {
+  const constraints = {
+    audio: false,
+    video: deviceId
+      ? {
+          deviceId: { exact: deviceId },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        }
+      : {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+  };
+
+  stopStream();
+  mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+  video.srcObject = mediaStream;
+  await video.play().catch(() => {});
+  video.classList.add("is-live");
+  feedIdle.classList.add("is-hidden");
+  liveBar.hidden = false;
+
+  const track = mediaStream.getVideoTracks()[0];
+  const label = track?.label || "camera";
+  feedSource.textContent = label;
+  preferredDeviceId = track?.getSettings?.().deviceId || deviceId || preferredDeviceId;
+
+  // Labels often only appear after permission — refresh list
+  await listCameras();
+  fillCameraSelects(preferredDeviceId);
+
+  return label;
+}
+
 armCamera.addEventListener("click", async () => {
+  armCamera.disabled = true;
+  armCamera.textContent = "Arming…";
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" } },
-      audio: false,
-    });
-    video.srcObject = mediaStream;
-    video.classList.add("is-live");
-    feedIdle.classList.add("is-hidden");
-    addMessage("agent", "Camera armed. Build step 01 when you are ready.");
-  } catch {
+    // Permission probe so Continuity / Desk View labels populate
+    if (!videoDevices.some((d) => d.label)) {
+      const probe = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+      for (const t of probe.getTracks()) t.stop();
+      await listCameras();
+    }
+
+    const chosen =
+      cameraSelect.value || preferredDeviceId || videoDevices[0]?.deviceId || "";
+    const label = await startCamera(chosen);
+    addMessage(
+      "agent",
+      `Camera armed on <strong>${escapeHtml(label)}</strong>. Prefer Desk View for the breadboard. Build step 01 when you are ready.`
+    );
+  } catch (err) {
+    const name = err?.name || "Error";
     addMessage(
       "system",
-      "Could not open the camera. Allow permission, or use HTTPS / localhost."
+      name === "NotAllowedError"
+        ? "Camera permission blocked. Allow it in the browser, then arm again."
+        : "Could not open that camera. On a Mac, enable Continuity Camera / Desk View in Control Centre, then pick it from the list."
     );
+  } finally {
+    armCamera.disabled = false;
+    armCamera.textContent = "Arm camera";
   }
+});
+
+async function onCameraChange(selectEl) {
+  const id = selectEl.value;
+  if (!id) return;
+  try {
+    const label = await startCamera(id);
+    addMessage("agent", `Switched feed to <strong>${escapeHtml(label)}</strong>.`);
+  } catch {
+    addMessage("system", "That camera failed to open. Try another source.");
+  }
+}
+
+cameraSelect.addEventListener("change", () => {
+  preferredDeviceId = cameraSelect.value;
+});
+cameraSelectLive.addEventListener("change", () => onCameraChange(cameraSelectLive));
+
+if (navigator.mediaDevices?.addEventListener) {
+  navigator.mediaDevices.addEventListener("devicechange", () => {
+    listCameras();
+  });
+}
+
+listCameras().catch(() => {
+  cameraSelect.innerHTML = `<option value="">Allow camera to list devices</option>`;
 });
 
 function tickClock() {

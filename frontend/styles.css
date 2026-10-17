@@ -219,8 +219,56 @@ body {
   color: var(--paper);
 }
 
+.feed__arm-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: stretch;
+  max-width: 36rem;
+}
+
+.feed__select {
+  appearance: none;
+  flex: 1 1 14rem;
+  min-width: 0;
+  border: 1px solid var(--rule);
+  background-color: var(--panel);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.7rem 1.85rem 0.7rem 0.85rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.feed__select:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.feed__select--live {
+  position: absolute;
+  left: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 2;
+  max-width: min(22rem, calc(100% - 1.5rem));
+  background: rgba(12, 14, 16, 0.92);
+  border-color: var(--rule);
+}
+
+.feed__live-bar {
+  position: absolute;
+  inset: auto 0 0 0;
+  pointer-events: none;
+}
+
+.feed__live-bar .feed__select--live {
+  pointer-events: auto;
+}
+
 .feed__arm {
-  align-self: flex-start;
   appearance: none;
   border: 1px solid var(--signal);
   background: var(--signal);
@@ -233,6 +281,7 @@ body {
   padding: 0.7rem 1.1rem;
   cursor: pointer;
   border-radius: var(--radius);
+  white-space: nowrap;
 }
 
 .feed__arm:hover {

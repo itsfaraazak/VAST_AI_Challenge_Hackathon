@@ -43,16 +43,26 @@
             <div class="feed__idle" id="feedIdle">
               <p class="feed__idle-kicker">Bench camera</p>
               <p class="feed__idle-copy">
-                Point your phone or webcam at the board.<br />
+                Uses your Mac camera, Continuity Camera, or iPhone Desk View.<br />
                 CURRENT only judges when your hands leave.
               </p>
-              <button type="button" class="feed__arm" id="armCamera">
-                Arm camera
-              </button>
+              <div class="feed__arm-row">
+                <label class="sr-only" for="cameraSelect">Camera source</label>
+                <select id="cameraSelect" class="feed__select" disabled>
+                  <option value="">Detecting cameras…</option>
+                </select>
+                <button type="button" class="feed__arm" id="armCamera">
+                  Arm camera
+                </button>
+              </div>
+            </div>
+            <div class="feed__live-bar" id="liveBar" hidden>
+              <label class="sr-only" for="cameraSelectLive">Camera source</label>
+              <select id="cameraSelectLive" class="feed__select feed__select--live"></select>
             </div>
             <div class="feed__chrome">
               <span id="feedClock">00:00:00</span>
-              <span>overhead · locked</span>
+              <span id="feedSource">no feed</span>
             </div>
           </div>
         </section>
