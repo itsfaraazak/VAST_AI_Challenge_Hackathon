@@ -30,7 +30,7 @@ const setPipe = (t) => { const p = $("pipeLog"); if (p && t) p.textContent = t; 
 /* ---------- coach subtitle + voice ---------- */
 function showCoach(text) {
   const el = $("coachLine");
-  el.innerHTML = String(text).split(/\s+/).map((w, i) => `<span class="w" style="animation-delay:${Math.min(i * 40, 1800)}ms">${esc(w)}&nbsp;</span>`).join("");
+  el.innerHTML = String(text).split(/\s+/).map((w, i) => `<span class="w" style="animation-delay:${Math.min(i * 40, 1800)}ms">${esc(w)}</span>`).join(" ");
 }
 function speak(text) {
   if (!voiceOn || !userGesture || !window.speechSynthesis || !text || text === lastSpoken) return;

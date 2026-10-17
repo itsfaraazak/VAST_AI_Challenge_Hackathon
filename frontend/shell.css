@@ -72,7 +72,7 @@ linear-gradient(90deg,rgba(39,242,255,.05) 1px,transparent 1px) 0 0/48px 48px;po
 .why{font:500 14px var(--body);color:var(--dim);margin-top:6px;min-height:0}.why:empty{display:none}.why b{color:var(--lime);font-family:var(--mono)}
 .coach{display:grid;min-width:0;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"who line form" "who user form";gap:2px 18px;padding:12px 18px;align-items:center;border-color:rgba(39,242,255,.45)}
 .coach__who{grid-area:who;font:700 13px var(--mono);letter-spacing:.25em;color:var(--lime);display:flex;gap:8px;align-items:center}
-.coach__line{grid-area:line;margin:0;font:600 clamp(20px,2.2vw,34px)/1.18 var(--body);min-height:2.4em;display:block;overflow-wrap:anywhere;max-height:3.6em;overflow:hidden}
+.coach__line{grid-area:line;margin:0;font:600 clamp(20px,2.2vw,34px)/1.18 var(--body);min-height:2.4em;display:block;max-height:3.6em;overflow:hidden}
 .coach__line .w{opacity:0;animation:wi .25s forwards}
 @keyframes wi{to{opacity:1}}
 .coach__user{grid-area:user;margin:0;font:13px var(--mono);color:var(--cyan);min-height:1em}
