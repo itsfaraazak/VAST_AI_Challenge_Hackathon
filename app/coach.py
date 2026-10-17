@@ -193,7 +193,38 @@ def _diag(sess) -> list[dict]:
     ms = diagnose(getattr(sess, "twin", None), getattr(sess, "findings", None), step)
     if project and project.get("id") != "blink":  # Blink-specific rules do not apply: generic checks only
         ms = [m for m in ms if m["id"] in _GENERIC_MISTAKES]
-    return ms
+    dismissed = set(c.get("dismissed") or [])
+    return [m for m in ms if m["id"] not in dismissed]
+
+
+async def override(sess, http, action: str, index: int | None = None) -> dict | None:
+    """Manual override: the user knows better than the vision model. Quiet, undoable by restarting the step."""
+    ensure_session_coach(sess)
+    c = sess.coach
+    idx = c.get("step_index", 0) if index is None else int(index)
+    if action in ("complete", "skip"):
+        set_step(sess, idx)
+        st = advance_step(sess, 1)
+        tip = await teach_current_step(sess, http, force=True)
+        lead = "Marked as done." if action == "complete" else "Skipped."
+        return _msg(sess, f"{lead} {(tip or {}).get('text', '')}".strip(), ["override_" + action], "curriculum")
+    if action == "dismiss":
+        ids = [m["id"] for m in _diag(sess)]
+        c["dismissed"] = sorted(set(c.get("dismissed") or []) | set(ids))
+        c["mistake_votes"] = {"ver": None, "seen": {}}
+        _touch(sess)
+        return _msg(sess, "Understood, I will stop flagging that. Tell me if I get it wrong again.", ["override_dismiss"], "curriculum")
+    if action == "recheck":
+        sess.force_cosmos = True
+        c["mistake_votes"] = {"ver": None, "seen": {}}
+        c["ready_votes"] = {"ver": None, "n": 0, "idx": idx}
+        return _msg(sess, "Taking another careful look at the board.", ["override_recheck"], "curriculum")
+    if action == "restart":
+        set_step(sess, idx)
+        c["dismissed"] = []
+        tip = await teach_current_step(sess, http, force=True)
+        return tip
+    return None
 
 
 def start_project(sess, project_id: str = "blink", board: str | None = None, project: dict | None = None) -> dict:

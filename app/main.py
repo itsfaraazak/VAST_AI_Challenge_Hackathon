@@ -212,6 +212,17 @@ async def _handle_msg(sess, role: str, data: dict, http: aiohttp.ClientSession) 
         await sess.broadcast({"type": "coach", **st})
         await _broadcast_guidance(sess, {"type": "guidance", "text": projects_store.resume_text(rec),
                                          "finding_ids": ["resume"], "source": "vast", "coach": st})
+    elif typ == "override":
+        from coach import override
+        g = await override(sess, http, str(data.get("action") or ""), data.get("index"))
+        await sess.broadcast({"type": "coach", **public_coach_state(sess)})
+        if g:
+            await _broadcast_guidance(sess, g)
+        try:  # keep a record of where the human disagreed with the system (learning signal)
+            from sponsors import vast_store
+            asyncio.create_task(vast_store.save_event(sess, "override", {"action": data.get("action"), "index": data.get("index")}))
+        except Exception:  # noqa: BLE001
+            pass
     elif typ == "coach_step":
         idx = data.get("index")
         if idx is None:

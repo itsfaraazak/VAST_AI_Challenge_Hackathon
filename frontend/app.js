@@ -108,7 +108,7 @@ function stepCard(s, i, idx) {
     ${s.why || s.concept ? `<div><b>WHY</b>${esc(s.why || s.concept)}</div>` : ""}
     ${s.hole_hint ? `<div class="hole"><b>HOLES</b>${esc(s.hole_hint)}</div>` : ""}
     ${quiz ? `<div class="quiz"><b>CHECK</b>${esc(typeof quiz === "string" ? quiz : quiz.q || quiz.question || "")}</div>` : ""}</div>` : "";
-  return `<li class="step ${st}" data-index="${i}"><div class="step__row"><b>${i < idx ? "✓" : String(i + 1).padStart(2, "0")}</b><span class="step__t">${esc(s.title)}</span></div>${body}</li>`;
+  return `<li class="step ${st}" data-index="${i}"><div class="step__row"><b>${i < idx ? "✓" : String(i + 1).padStart(2, "0")}</b><span class="step__t">${esc(s.title)}</span><button type="button" class="step__more" data-i="${i}" title="More" aria-label="Step options">⋯</button></div>${body}</li>`;
 }
 function applyCoach(state) {
   if (!state) return;
@@ -288,7 +288,21 @@ $("chatForm").addEventListener("submit", (e) => {
 $("quick").addEventListener("click", (e) => { const b = e.target.closest(".qchip"); if (!b) return; pushThread(b.textContent, true); send({ type: "ask", text: b.dataset.q }); });
 $("btnForce").onclick = () => { send({ type: "force_analyze" }); setPipe("force analyze requested…"); };
 $("togBoxes").onchange = () => lastYolo && drawYolo(lastYolo);
+function closeStepMenu() { document.getElementById("stepMenu")?.remove(); }
+document.addEventListener("click", (e) => { if (!e.target.closest(".step__more, #stepMenu")) closeStepMenu(); });
+function openStepMenu(btn) {
+  closeStepMenu();
+  const i = +btn.dataset.i, r = btn.getBoundingClientRect(), m = document.createElement("div");
+  m.id = "stepMenu"; m.className = "stepmenu";
+  m.innerHTML = [["complete", "Mark step as done"], ["skip", "Skip this step"], ["dismiss", "System is wrong: dismiss warning"], ["recheck", "Re-check the board now"], ["restart", "Restart this step"]]
+    .map(([a, t]) => `<button type="button" data-a="${a}">${t}</button>`).join("");
+  m.style.top = Math.min(r.bottom + 4, innerHeight - 190) + "px"; m.style.left = Math.max(8, r.right - 220) + "px";
+  m.addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (!b) return; send({ type: "override", action: b.dataset.a, index: i }); closeStepMenu(); });
+  document.body.appendChild(m);
+}
 $("stepList").addEventListener("click", (e) => {
+  const more = e.target.closest(".step__more");
+  if (more) { e.stopPropagation(); openStepMenu(more); return; }
   const li = e.target.closest(".step");
   if (!li) return;
   if (li.dataset.index != null) send({ type: "coach_step", index: +li.dataset.index });
