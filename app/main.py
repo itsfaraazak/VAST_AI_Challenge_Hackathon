@@ -295,10 +295,7 @@ def create_app() -> web.Application:
                 raise web.HTTPNotFound()
             return web.FileResponse(path)
 
-        app.router.add_get(
-            "/{name:app\\.js|styles\\.css|nano3d\\.js|README\\.md}",
-            _asset,
-        )
+        app.router.add_get("/{name:[A-Za-z0-9_.\\-]+\\.(?:js|css|json|webmanifest|svg|png|glb|md)}", _asset)
     if STATIC.exists():
         app.router.add_static("/static/", STATIC, show_index=False)
     app.on_startup.append(on_start)
