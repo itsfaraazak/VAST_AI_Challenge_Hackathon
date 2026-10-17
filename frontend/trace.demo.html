@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8"><title>trace demo</title>
+<link rel="stylesheet" href="trace.css">
+<body style="background:#020406;margin:20px"><div id="h" style="width:380px"></div>
+<script type="module">
+import "./trace.js";
+CurrentTrace.mount(document.getElementById("h"));
+CurrentTrace.setServices({services:{cosmos3_reason:true,yolo11:true,cosmos_embed1:false,canary_1b:true,wandb_inference:true,vss_retrieval:false}});
+let id=1;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function span(stage,label,model,sponsor,ms,detail,status="ok"){
+  const i=id++; CurrentTrace.push({type:"trace",id:i,stage,label,model,sponsor,status:"start",ms:null,detail:"",t:0});
+  await sleep(ms); CurrentTrace.push({type:"trace",id:i,stage,label,model,sponsor,status,ms:ms+Math.random()*30,detail,t:0});}
+async function loop(){ for(let n=0;;n++){
+  CurrentTrace.push({id:id++,stage:"frame",label:"frame in",model:"phone camera",sponsor:"local",status:"ok",detail:"seq "+n});
+  await span("yolo","YOLO11 detect","YOLO11","nvidia",120+Math.random()*60,"laptop, keyboard");
+  if(n%3==2){CurrentTrace.push({id:id++,stage:"gate",label:"relevance gate",model:"scene gate",sponsor:"local",status:"skip",detail:"skipped: person_or_animal_in_frame"});await sleep(500);continue;}
+  CurrentTrace.push({id:id++,stage:"gate",label:"relevance gate",model:"scene gate",sponsor:"local",status:"ok",detail:"desk_hints"});
+  await span("cosmos","Cosmos3-Reason twin","Cosmos3-Reason","nvidia",900,"scene=bench, 5 parts, 3 nets",n==4?"error":"ok");
+  await span("verify","verifier","deterministic verifier","local",20,"2 findings, badge=warn");
+  await span("coach","coach tip","Llama-3.1","wandb",400,"Flip the LED around");
+  await sleep(600);}}
+loop();
+</script>
