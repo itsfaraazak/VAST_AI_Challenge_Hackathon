@@ -58,7 +58,7 @@ function mistakeBanner(mistakes) {
   const list = (mistakes || []).filter((m) => !dismissedIds.has(m.id));
   const key = list.map((m) => m.id).join(",");
   if (key !== issueKey) { issueKey = key; issueSince = list.length ? Date.now() : 0; }
-  const stable = list.length && Date.now() - issueSince >= 5000;   // must persist 5 s before we say anything
+  const stable = list.length && (list.some((m) => m.forced) || Date.now() - issueSince >= 5000);   // must persist 5 s before we say anything
   if (stable) {
     const m = list[0];
     box.hidden = false; box.classList.remove("fixed"); clearTimeout(okTimer);
@@ -436,3 +436,6 @@ async function sendSession(beacon = false) {
 $("btnVss").onclick = () => sendSession();
 let autoSent = false;
 addEventListener("pagehide", () => { if (!autoSent && !DEMO && !uploading && mBytes > 50000) { autoSent = true; sendSession(true); } });
+
+/* hook for demo teleop (frontend/teleop.js) */
+window.__current = { onBackend, getCoach: () => coach };
